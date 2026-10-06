@@ -1,0 +1,29 @@
+# Rust build output (includes dist's target/distrib)
+/target/
+
+# rustfmt backups
+**/*.rs.bk
+
+# Coverage and profiling
+*.profraw
+*.profdata
+lcov.info
+/coverage/
+/mutants.out*/
+
+# Local env and secrets
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
+
+# fm-mcp test and probe leftovers
+*.sock
+*.fm-mcp-backup-*

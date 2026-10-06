@@ -1,0 +1,20 @@
+<!--
+Append this section to your project's CLAUDE.md
+(or AGENTS.md for Antigravity, .cursorrules for Cursor, etc.)
+-->
+
+## Project Status & Plan Management
+
+This project uses the `plans/` convention. Two files anchor everything:
+
+- `plans/STATUS.md` is the front door. It shows current state (in flight, up next, recently shipped). Read it at the start of every session.
+- `plans/README.md` is the convention itself. It covers plan file format, frontmatter spec, the two-source rule, lifecycle, directory layout, and quick rules. Read it whenever you engage with the `plans/` system in a session, and re-consult when uncertain. It is the source of truth for the convention.
+
+Non-deferrable operational rules (do not violate even if `plans/README.md` is not yet loaded):
+
+- **Write plans only in `plans/active/`.** When the user asks you to plan, design, or spec out non-trivial work, scaffold the file with `/plans new`. Never save plans to an assistant scratch or memory directory (`~/.claude/`, `~/.cursor/`, `.agents/`, `.windsurf/`, or equivalent), to plan-mode artifacts, or to loose files at the repo root. Plans written outside `plans/active/` are invisible to collaborators, the dashboard, and `/plans sync`.
+- **`plans/plans.json` is auto-generated.** Never hand-edit it.
+- **Update plans before ending a session.** If the session touched code covered by an active plan, update that plan's `## Status` banner and bump `last_updated` in its frontmatter before finishing. Do not defer to a follow-up session.
+- **Audit drift with `/plans sync`.** Run it periodically, and after notable git activity, to reconcile plans against git log and regenerate `plans.json` and `STATUS.md` auto-sections.
+
+Anything not covered above (frontmatter fields, status banner format, two-source rule, idea lifecycle, moves between `active/`, `shipped/`, and `superseded/`, the dashboard, file-move conventions, etc.) lives in `plans/README.md`. Defer to that file rather than guessing.
