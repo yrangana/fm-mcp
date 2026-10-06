@@ -1,0 +1,36 @@
+[package]
+name = "fm-mcp"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "MCP server that lets coding agents delegate simple, private work to the on-device model for Apple Foundation Models (macOS 27)"
+# Licence is undecided (plan Q2). Keep publishing off until it is.
+publish = false
+
+[dependencies]
+anyhow = "1"
+bytes = "1"
+clap = { version = "4.6", features = ["derive"] }
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+nix = { version = "0.31", features = ["signal"] }
+rmcp = { version = "3.5", features = ["server", "macros", "transport-io"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3.27"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "net", "process", "signal", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+
+[profile.release]
+lto = "thin"
+strip = true
