@@ -111,10 +111,14 @@ pub enum BackendError {
     Guardrail,
     #[error("model server returned HTTP {status}: {message}")]
     Http { status: u16, message: String },
-    #[error("the model is not available: {0}")]
-    Unavailable(String),
+    #[error("the model server reports the model is not available")]
+    ModelUnavailable,
+    #[error("could not start the model server: {0}")]
+    StartFailed(String),
     #[error("could not reach the model server: {0}")]
     Connection(String),
+    #[error("the model server crashed {0} times in the last minute")]
+    CrashLoop(usize),
     #[error("the model did not answer within {0} s")]
     Timeout(u64),
     #[error("unexpected response from the model server: {0}")]

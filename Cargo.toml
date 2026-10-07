@@ -7,6 +7,21 @@ description = "MCP server that lets coding agents delegate simple, private work 
 # Licence is undecided (plan Q2). Keep publishing off until it is.
 publish = false
 
+[features]
+# Builds the `fake-fm` test binary used by the integration tests.
+# Run tests with `cargo test --features fake-fm`.
+fake-fm = ["hyper/server"]
+
+[[bin]]
+name = "fm-mcp"
+path = "src/main.rs"
+
+[[bin]]
+name = "fake-fm"
+path = "tests/fake_fm/fake_fm.rs"
+required-features = ["fake-fm"]
+test = false
+
 [dependencies]
 anyhow = "1"
 bytes = "1"
