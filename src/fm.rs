@@ -34,13 +34,15 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 
-use crate::backend::{Backend, BackendError, BoxFuture, ChatRequest, ChatResponse};
+use crate::{
+    backend::{Backend, BackendError, BoxFuture, ChatRequest, ChatResponse},
+    orphans::{SOCKET_DIR_PREFIX, SOCKET_NAME},
+};
 
 const DEFAULT_FM_PATH: &str = "/usr/bin/fm";
 /// macOS limits Unix socket paths to 104 bytes. A longer path fails silently:
 /// `fm serve` keeps running but never creates the socket.
 const MAX_SOCKET_PATH: usize = 100;
-const SOCKET_NAME: &str = "fm.sock";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL: Duration = Duration::from_millis(100);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
@@ -114,10 +116,13 @@ impl State {
     }
 }
 
-/// Fields drop in order: the child is killed first, then the private socket
-/// directory (and the socket in it) is removed.
+/// Fields drop in order: the child is killed first, then its watchdog, then the
+/// private socket directory (and the socket in it) is removed.
 struct Running {
     child: Child,
+    /// Stops `child` if fm-mcp is force-killed (see `orphans`). `None` if it
+    /// couldn't be started; fm-mcp still works without it.
+    _watchdog: Option<Child>,
     socket: PathBuf,
     _socket_dir: TempDir,
 }
@@ -234,9 +239,11 @@ impl FmServe {
 
         let pid = child.id().unwrap_or_default();
         info!("fm serve started pid={pid} socket={}", socket.display());
+        let watchdog = spawn_watchdog(pid, socket_dir.path());
 
         let mut running = Running {
             child,
+            _watchdog: watchdog,
             socket,
             _socket_dir: socket_dir,
         };
@@ -306,7 +313,36 @@ impl Running {
             let _ = self.child.kill().await;
         }
         info!("fm serve stopped");
+        // The watchdog exits by itself once the child is gone; dropping
+        // `self` kills it anyway (`kill_on_drop`).
     }
+}
+
+/// Starts `fm-mcp __watch` for the `fm serve` child `child_pid`.
+fn spawn_watchdog(child_pid: u32, socket_dir: &Path) -> Option<Child> {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            warn!("no watchdog for fm serve: cannot find own executable: {e}");
+            return None;
+        }
+    };
+    Command::new(exe)
+        .arg("__watch")
+        .arg("--parent")
+        .arg(std::process::id().to_string())
+        .arg("--child")
+        .arg(child_pid.to_string())
+        .arg("--socket-dir")
+        .arg(socket_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .process_group(0)
+        .spawn()
+        .inspect_err(|e| warn!("no watchdog for fm serve: {e}"))
+        .ok()
 }
 
 /// Creates a fresh private directory for the socket: random name, mode 0700,
@@ -319,7 +355,7 @@ fn private_socket_dir(tmpdir: Option<&Path>) -> Result<(TempDir, PathBuf), Backe
     let mut last_error = String::from("no usable temporary directory");
     for base in tmpdir.into_iter().chain([Path::new("/tmp")]) {
         let dir = match tempfile::Builder::new()
-            .prefix("fm-mcp-")
+            .prefix(SOCKET_DIR_PREFIX)
             .permissions(Permissions::from_mode(0o700))
             .tempdir_in(base)
         {

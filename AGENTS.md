@@ -31,6 +31,7 @@ Other Apple FM MCP servers exist, all Python and clone-to-install. What sets thi
 
 - **Rust**, MCP via the official `rmcp` SDK, **stdio** transport.
 - **Model access through `fm serve`**, which fm-mcp spawns as a child process on a Unix socket, supervises, and shuts down on exit.
+- **Orphan protection.** Each `fm serve` gets a watchdog, a hidden `fm-mcp __watch` mode of the same binary. If fm-mcp is force-killed and cannot clean up, the watchdog stops `fm serve` and deletes its socket folder. At startup, fm-mcp also stops any of the user's orphaned `fm serve --socket …/fm-mcp-*/fm.sock` processes (parent pid 1) and deletes stale `fm-mcp-*` folders. Code: `src/orphans.rs`.
 - **`fm` CLI only for what `serve` cannot do:** OCR and barcode (`fm respond --tool ocr|barcode`) and token counting (`fm count-tokens -q`).
 - **No Swift bridge, no SDK.** There is no Rust SDK for FoundationModels; bridging to Swift is not worth the build cost.
 - **Backend behind a trait**, so Ollama or Foundry Local can be added later (both speak the same Chat Completions format). v1 ships the `fm` backend only.
