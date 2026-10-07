@@ -471,7 +471,7 @@ fn extract_runaway_should_become_a_stuck_error() {
         result.is_error
             && result
                 .text
-                .starts_with("The on-device model got stuck and was stopped."),
+                .starts_with("The on-device model got stuck and was stopped after 1 s."),
         "{}",
         result.text
     );

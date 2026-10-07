@@ -4,6 +4,7 @@
 mod backend;
 mod chunk;
 mod fm;
+mod guidance;
 mod orphans;
 mod schema;
 mod server;

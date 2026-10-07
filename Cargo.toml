@@ -11,7 +11,7 @@ readme = "README.md"
 keywords = ["mcp", "llm", "on-device", "macos", "claude"]
 categories = ["command-line-utilities", "development-tools"]
 # What goes into a crates.io package. tests/ is needed for the fake-fm bin target.
-include = ["/src", "/tests", "/LICENSE", "/README.md"]
+include = ["/src", "/tests", "/skills", "/snippets", "/LICENSE", "/README.md"]
 # Not released yet: keep crates.io publishing off until the Phase 7 release.
 publish = false
 
