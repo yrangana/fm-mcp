@@ -6,7 +6,7 @@ Guidance for coding agents (Claude Code, Codex) working in this repository.
 
 **fm-mcp** — an MCP server that lets coding agents hand cheap, private, simple work to Apple's on-device Foundation Model (the `fm` that ships with macOS 27). Free, offline, one-command install.
 
-**There is no code yet.** Planning comes first, under `plans/`.
+**Status:** v1 is being built in phases; see `plans/active/FM_MCP_V1.md`. Phase 1 (stdio server with `summarise` over `fm serve`) is on branch `phase-1-scaffold`.
 
 ## The goal
 
@@ -23,7 +23,7 @@ Other Apple FM MCP servers exist, all Python and clone-to-install. What sets thi
 
 ## v1 scope
 
-- **Tools:** `summarise`, `extract` (JSON schema), `classify`, `ocr`, possibly a general `ask`.
+- **Tools:** `summarise`, `extract` (JSON schema), `classify`, `ocr`. No general `ask` tool in v1 (decided 2026-10-06: it invites over-delegation).
 - **Commands:** `fm-mcp` (stdio server), `fm-mcp install [--claude] [--codex]`, `fm-mcp doctor`.
 - **Requirements:** Apple Silicon, macOS 27, Apple Intelligence enabled.
 

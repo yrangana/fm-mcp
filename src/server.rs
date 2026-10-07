@@ -8,7 +8,7 @@ use rmcp::{
     model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig},
     schemars, tool, tool_handler, tool_router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
 
 use crate::backend::{Backend, BackendError, ChatMessage, ChatRequest};
@@ -23,27 +23,28 @@ Limits: small model with an ~8K-token context shared by input and summary, so se
 longer input returns an error. Not for code, maths, reasoning or facts. \
 Summaries can miss or distort details; check anything important.";
 
+// Tool schemas stay portable: one `type` per field (no `["string", "null"]`)
+// and no `$ref`, because some clients reject either. A test enforces this.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SummariseParams {
     /// The text to summarise: plain text, Markdown or logs. Keep it under about 4,000 words.
     pub text: String,
-    /// Optional focus, for example "errors only" or "decisions and owners".
+    /// Optional focus, for example "errors only" or "decisions and owners". Leave empty for a general summary.
     #[serde(default)]
-    pub focus: Option<String>,
-    /// How long the summary should be. Defaults to `medium`.
+    pub focus: String,
+    /// How long the summary should be: `short` (one or two sentences), `medium` (one paragraph of
+    /// three to five sentences) or `bullets` (three to seven bullet points). Defaults to `medium`.
     #[serde(default)]
     pub length: SummaryLength,
 }
 
-#[derive(Debug, Default, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[schemars(inline)]
 pub enum SummaryLength {
-    /// One or two sentences.
     Short,
-    /// One paragraph of three to five sentences.
     #[default]
     Medium,
-    /// Three to seven bullet points.
     Bullets,
 }
 
@@ -146,12 +147,8 @@ fn summarise_request(params: &SummariseParams) -> ChatRequest {
          Do not add facts, opinions or advice. ",
     );
     system.push_str(params.length.instruction());
-    if let Some(focus) = params
-        .focus
-        .as_deref()
-        .map(str::trim)
-        .filter(|f| !f.is_empty())
-    {
+    let focus = params.focus.trim();
+    if !focus.is_empty() {
         system.push_str(&format!(
             " Focus on: {focus}. Leave out anything unrelated."
         ));
@@ -221,9 +218,72 @@ mod tests {
     fn params(length: SummaryLength, focus: Option<&str>) -> SummariseParams {
         SummariseParams {
             text: "Some text.".into(),
-            focus: focus.map(Into::into),
+            focus: focus.unwrap_or_default().into(),
             length,
         }
+    }
+
+    fn tool_schemas() -> Vec<serde_json::Value> {
+        let backend: Arc<dyn Backend> = Arc::new(NoBackend);
+        FmMcp::new(backend)
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|tool| serde_json::Value::Object((*tool.input_schema).clone()))
+            .collect()
+    }
+
+    /// Collects every `type` value and `$ref` key found anywhere in a schema.
+    fn walk(value: &serde_json::Value, types: &mut Vec<serde_json::Value>, refs: &mut usize) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    match key.as_str() {
+                        "type" => types.push(child.clone()),
+                        "$ref" => *refs += 1,
+                        _ => {}
+                    }
+                    walk(child, types, refs);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    walk(item, types, refs);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn tool_schemas_should_use_a_single_type_per_field() {
+        for schema in tool_schemas() {
+            let (mut types, mut refs) = (Vec::new(), 0);
+            walk(&schema, &mut types, &mut refs);
+            assert!(types.iter().all(serde_json::Value::is_string), "{schema}");
+        }
+    }
+
+    #[test]
+    fn tool_schemas_should_not_use_refs() {
+        for schema in tool_schemas() {
+            let (mut types, mut refs) = (Vec::new(), 0);
+            walk(&schema, &mut types, &mut refs);
+            assert_eq!(refs, 0, "{schema}");
+        }
+    }
+
+    #[test]
+    fn length_schema_should_be_an_inline_enum_with_default() {
+        let schema = &tool_schemas()[0];
+        let length = &schema["properties"]["length"];
+        assert_eq!(
+            (&length["enum"], &length["default"]),
+            (
+                &serde_json::json!(["short", "medium", "bullets"]),
+                &serde_json::json!("medium")
+            )
+        );
     }
 
     #[test]
