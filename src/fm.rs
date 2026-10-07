@@ -411,7 +411,7 @@ fn spawn_watchdog(child_pid: u32, socket_dir: &Path) -> Option<Child> {
 /// The socket never sits directly in a shared directory such as `/tmp`, so
 /// another local user can't pre-create the path and intercept requests.
 /// Uses `$TMPDIR` (per-user on macOS) when the socket path fits, else `/tmp`.
-fn private_socket_dir(tmpdir: Option<&Path>) -> Result<(TempDir, PathBuf), BackendError> {
+pub fn private_socket_dir(tmpdir: Option<&Path>) -> Result<(TempDir, PathBuf), BackendError> {
     let mut last_error = String::from("no usable temporary directory");
     for base in tmpdir.into_iter().chain([Path::new("/tmp")]) {
         let dir = match tempfile::Builder::new()

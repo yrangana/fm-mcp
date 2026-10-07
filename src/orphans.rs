@@ -59,7 +59,8 @@ pub struct Orphan {
 /// socket path, now owned by launchd (parent pid 1).
 pub fn find_orphans() -> Vec<Orphan> {
     match Command::new("/bin/ps")
-        .args(["-A", "-o", "pid=,ppid=,uid=,command="])
+        // `-ww`: never truncate the command line, or the socket path could be cut.
+        .args(["-A", "-ww", "-o", "pid=,ppid=,uid=,command="])
         .output()
     {
         Ok(output) => parse_ps(&String::from_utf8_lossy(&output.stdout), getuid().as_raw()),

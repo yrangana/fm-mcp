@@ -498,6 +498,26 @@ fn classify_multi_should_return_a_list_of_labels() {
 }
 
 #[test]
+fn classify_multi_should_ask_for_at_least_one_label_and_room_to_answer() {
+    let mut server = Server::start(&[]);
+    server.call_tool(
+        "classify",
+        json!({"text": "Crash", "labels": ["bug", "feature"], "multi": true}),
+    );
+    let request: Value = server
+        .fake_log()
+        .iter()
+        .find_map(|l| l.strip_prefix("request "))
+        .map(|json| serde_json::from_str(json).unwrap())
+        .unwrap();
+    let labels = &request["response_format"]["json_schema"]["schema"]["properties"]["labels"];
+    assert_eq!(
+        (&labels["minItems"], &request["max_tokens"]),
+        (&json!(1), &json!(500))
+    );
+}
+
+#[test]
 fn classify_should_reject_bad_labels_without_the_model() {
     let mut server = Server::start(&[]);
     let result = server.call_tool("classify", json!({"text": "x", "labels": ["only one"]}));
