@@ -251,3 +251,73 @@ fn sigterm_should_stop_fm_serve_and_remove_the_socket() {
 fn sigint_should_stop_fm_serve_and_remove_the_socket() {
     assert_clean_exit(|server| server.signal(Signal::SIGINT));
 }
+
+// --- Orphan protection (plan R13, D7) ----------------------------------------
+
+#[test]
+fn sigkill_of_fm_mcp_should_let_the_watchdog_stop_fm_serve() {
+    let mut server = Server::start(&[]);
+    server.summarise("hello");
+    let child = server.current_fm_serve();
+    let dir = socket_dir(&child).to_path_buf();
+
+    server.signal(Signal::SIGKILL);
+    server.wait_for_exit(EXIT_LIMIT);
+
+    assert!(
+        wait_until_gone(child.pid, EXIT_LIMIT),
+        "fm serve pid {} outlived a force-killed fm-mcp",
+        child.pid
+    );
+    assert!(
+        wait_until(EXIT_LIMIT, || !dir.exists()),
+        "socket dir {dir:?} left behind"
+    );
+}
+
+#[test]
+fn start_should_stop_fm_serve_orphaned_by_an_earlier_session() {
+    // An orphan: a fake `fm serve` on an fm-mcp-style socket whose parent has
+    // exited, so launchd owns it. `sh` backgrounds it and exits at once.
+    let base = tempfile::tempdir().unwrap();
+    let dir = base.path().join("fm-mcp-orphantest");
+    std::fs::create_dir(&dir).unwrap();
+    let socket = dir.join("fm.sock");
+    let output = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(r#""$0" serve --socket "$1" >/dev/null 2>&1 & echo $!"#)
+        .arg(common::fake_fm_path())
+        .arg(&socket)
+        .output()
+        .unwrap();
+    let pid: i32 = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(
+        wait_until(EXIT_LIMIT, || socket.exists()),
+        "orphan never listened"
+    );
+
+    let _server = Server::start(&[]);
+
+    assert!(
+        wait_until_gone(pid, EXIT_LIMIT),
+        "orphaned fm serve pid {pid} was not stopped"
+    );
+    assert!(
+        wait_until(EXIT_LIMIT, || !dir.exists()),
+        "orphan's socket dir {dir:?} left behind"
+    );
+}
+
+fn wait_until(limit: Duration, condition: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
+        if condition() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    condition()
+}

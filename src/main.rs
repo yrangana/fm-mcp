@@ -3,9 +3,10 @@
 
 mod backend;
 mod fm;
+mod orphans;
 mod server;
 
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -34,6 +35,17 @@ enum Command {
     Install,
     /// Check everything fm-mcp needs and explain what is missing (not implemented yet).
     Doctor,
+    /// Internal: started by fm-mcp next to each `fm serve`. Stops it if fm-mcp
+    /// is force-killed and can't clean up.
+    #[command(name = "__watch", hide = true)]
+    Watch {
+        #[arg(long)]
+        parent: i32,
+        #[arg(long)]
+        child: i32,
+        #[arg(long)]
+        socket_dir: PathBuf,
+    },
 }
 
 /// How long to wait for runtime tasks at exit. Tokio reads stdin on a blocking
@@ -43,6 +55,16 @@ const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(200);
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(Command::Watch {
+        parent,
+        child,
+        socket_dir,
+    }) = &cli.command
+    {
+        // Plain threads only: the watchdog should stay tiny.
+        orphans::watch(*parent, *child, socket_dir);
+        return Ok(());
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -51,6 +73,7 @@ fn main() -> Result<()> {
             None => serve().await,
             Some(Command::Install) => anyhow::bail!("`fm-mcp install` is not implemented yet"),
             Some(Command::Doctor) => anyhow::bail!("`fm-mcp doctor` is not implemented yet"),
+            Some(Command::Watch { .. }) => Ok(()),
         }
     });
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
@@ -69,6 +92,16 @@ async fn serve() -> Result<()> {
         .init();
 
     info!("fm-mcp {} starting", env!("CARGO_PKG_VERSION"));
+    // Stop `fm serve` processes orphaned by earlier, force-killed sessions.
+    // In the background, so a slow `ps` never delays the MCP handshake.
+    tokio::task::spawn_blocking(|| {
+        let bases: Vec<PathBuf> = std::env::var_os("TMPDIR")
+            .map(PathBuf::from)
+            .into_iter()
+            .chain([PathBuf::from("/tmp")])
+            .collect();
+        orphans::clean_up(&bases);
+    });
     let backend = Arc::new(FmServe::new(FmConfig::from_env()));
     let service = FmMcp::new(backend.clone()).serve(stdio()).await?;
 
