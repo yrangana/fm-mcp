@@ -84,7 +84,7 @@ Probed on macOS 27, 2026-10-06; re-checked on macOS 27.0.1 (26A434), 2026-10-06.
 ## Open decisions
 
 - **GitHub owner** — decided 2026-10-07: `yrangana`. Repo `github.com/yrangana/fm-mcp`, tap `yrangana/homebrew-tap`, MCP Registry name `io.github.yrangana/fm-mcp`.
-- **Licence** — proposed `MIT OR Apache-2.0`, not confirmed.
+- **Licence** — decided 2026-10-07: **MIT** (`LICENSE`).
 
 ## Hard rules
 
