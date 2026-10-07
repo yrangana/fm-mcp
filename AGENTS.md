@@ -67,6 +67,7 @@ Probed on macOS 27, 2026-10-06; re-checked on macOS 27.0.1 (26A434), 2026-10-06.
   - `classify`: 0.5 s per call. Over 20 varied support messages with 4 labels, 20 of 20 answers were valid labels and 18 of 20 were the expected label.
   - `ocr`: about 2.1 s per image. 30 of 30 known phrases across the 5 test images.
 - **Token density varies a lot by text type** *(measured 2026-10-07)*. Characters per token: prose (AGENTS.md) 3.5, Rust code 3.5, random dictionary words 4.2, timestamped logs with IDs and numbers **1.6**. A fixed characters-per-token estimate undercounts logs by more than half, so always count real tokens. `fm count-tokens -q` over stdin takes about 0.08 s (1.3 s on the first, cold call). Empty input fails with *"Missing prompt."*, so never send empty text.
+  - **Words per token in prose, for the limits the tools quote** *(measured 2026-10-07 on repeated README text)*: 3,640 words = 5,840 tokens; 4,095 words = 6,570; 5,005 words = 8,030. So about 1.6 tokens per word. The `extract` input budget is 6,518 tokens and `classify` 7,318, which is why both tools say "about 3,500 words"; 5,000 words is refused as too long. The `summarise` cap of 48,000 tokens is about 30,000 words.
 - **Structured output: which JSON Schema features work** *(probed 2026-10-07 on a short invoice)*.
   - **Work:** flat objects (string, number, integer, boolean), nested objects, arrays of strings, arrays of objects, `enum`, `const`, `minItems`/`maxItems`, `additionalProperties: false`, and a top-level array (messy output).
   - **`anyOf`:** needs a `title` on the property that holds it, e.g. `{"title": "Total", "anyOf": [...]}`; without one, HTTP 400 *"AnyOf schemas require a 'title' key"*. Titles on the branches don't help.
@@ -96,6 +97,7 @@ Probed on macOS 27, 2026-10-06; re-checked on macOS 27.0.1 (26A434), 2026-10-06.
 - **Lint:** `cargo clippy --all-targets --all-features -- -D warnings` and `cargo fmt --check`. CI (`.github/workflows/ci.yml`) runs all three on macOS arm64.
 - **The fake is driven by** environment variables (`FAKE_FM_AVAILABLE`, `FAKE_FM_START_DELAY_MS`, `FAKE_FM_LOG`) and magic words in the prompt (`FAKE_OVERFLOW`, `FAKE_GUARDRAIL`, `FAKE_BAD_REQUEST`, `FAKE_HANG`, `FAKE_CRASH`, `FAKE_CRASH_ONCE`). When `fm` shows new behaviour, record it in the verified facts above and teach the fake.
 - **Settings:** `FM_MCP_FM_PATH` (default `/usr/bin/fm`), `FM_MCP_REQUEST_TIMEOUT_SECS` (default 120), `FM_MCP_LOG` (log filter, default `info,rmcp=warn`). Logs go to stderr only; stdout is the MCP protocol.
+- **Delegation guidance** lives in `skills/fm-delegate/SKILL.md` (Claude Code skill) and `snippets/AGENTS.md.snippet` (Codex). Both are embedded in the binary by `src/guidance.rs`. Change them only after testing decisions with sub-agents before and after (see the plan's Phase 4 notes), and keep their size limits in step with the `summarise` description.
 - **Tool schemas must be portable:** one `type` per field and no `$ref`. A unit test enforces this for every tool.
 
 ## Distribution

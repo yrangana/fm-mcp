@@ -31,13 +31,14 @@ call) and can be wrong, so check anything important.";
 
 const SUMMARISE_DESCRIPTION: &str = "Summarise text with the on-device model for Apple \
 Foundation Models. Free, private and offline. Good for condensing logs, documents, notes and \
-transcripts. Long input (up to about 30,000 words of prose, far less for dense logs) is split \
-into parts and combined, which is slower and loses some detail. Not for code, maths, reasoning \
-or facts. Summaries can miss or distort details; check anything important.";
+transcripts. Limit: about 30,000 words of prose but only about 1,000 lines of a dense log; \
+filter bigger logs first (for example, grep the errors). Long input is split into parts and \
+combined, which is slower and can drop details. Not for code, maths, reasoning or facts. \
+Summaries can miss or distort details; check anything important.";
 
 const EXTRACT_DESCRIPTION: &str = "Extract fields from text into JSON matching a JSON Schema, \
 with the on-device model for Apple Foundation Models (free, private, offline). Good for names, \
-dates, amounts and IDs in short documents, emails or logs. Input up to about 5,000 words. Fields \
+dates, amounts and IDs in short documents, emails or logs. Input up to about 3,500 words. Fields \
 the text lacks come back as null. Flat schemas work best; nested objects are unreliable. Allowed \
 keywords: type, properties, required, items, enum, const, description, minItems, maxItems. Not \
 for code or reasoning. Values can be wrong; check what matters.";
@@ -45,7 +46,7 @@ for code or reasoning. Values can be wrong; check what matters.";
 const CLASSIFY_DESCRIPTION: &str = "Pick the best label for a text from a list you give, with \
 the on-device model for Apple Foundation Models (free, private, offline). Good for triage: \
 sorting tickets, emails, comments or log lines into categories. The answer is always one of \
-your labels (or several, with `multi`). Input up to about 5,000 words; 2 to 50 labels. Subtle \
+your labels (or several, with `multi`). Input up to about 3,500 words; 2 to 50 labels. Subtle \
 or ambiguous text can be mislabelled, so spot-check. Not for code, maths or reasoning.";
 
 const OCR_DESCRIPTION: &str = "Read the text in an image file (screenshot, scanned page, \
@@ -82,7 +83,7 @@ pub struct SummariseParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ExtractParams {
-    /// The text to extract from. Up to about 5,000 words.
+    /// The text to extract from. Up to about 3,500 words.
     pub text: String,
     /// A JSON Schema for the result. The top level must be an object, for example
     /// {"type": "object", "properties": {"invoice": {"type": "string"}, "total": {"type": "number"}}}.
@@ -94,7 +95,7 @@ pub struct ExtractParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ClassifyParams {
-    /// The text to classify. Up to about 5,000 words.
+    /// The text to classify. Up to about 3,500 words.
     pub text: String,
     /// The labels to choose from: 2 to 50 distinct, non-empty strings.
     pub labels: Vec<String>,
@@ -322,13 +323,14 @@ impl FmMcp {
     ) -> CallToolResult {
         let response = match self.backend.chat(request).await {
             Ok(response) => response,
-            Err(BackendError::Timeout(_)) => {
+            Err(BackendError::Timeout(secs)) => {
                 warn!("{tool}: structured output ran away; fm serve replaced");
-                return tool_error(
-                    "The on-device model got stuck and was stopped. This happens when the schema \
-                     is nested or asks for many fields the text doesn't contain. Try a flat \
-                     schema with fewer fields, or do this task yourself.",
-                );
+                return tool_error(&format!(
+                    "The on-device model got stuck and was stopped after {secs} s. Either the \
+                     schema made it run away (nested, or many fields the text doesn't contain), \
+                     or another session is using the model. Try once more with a flatter schema \
+                     and fewer fields; if that fails too, do this task yourself."
+                ));
             }
             Err(e) => {
                 warn!("{tool} failed: {e}");
