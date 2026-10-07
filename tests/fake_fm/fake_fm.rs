@@ -4,7 +4,8 @@
 //!
 //! Startup behaviour comes from environment variables, which fm-mcp passes on:
 //! - `FAKE_FM_LOG`: append `start pid=<N>` and `request <json>` lines to this file.
-//! - `FAKE_FM_AVAILABLE=false`: `/health` reports the model as unavailable.
+//! - `FAKE_FM_AVAILABLE=false`: `/health` and `available` report the model as unavailable.
+//! - `FAKE_FM_LICENSE=false`: `license --status` reports the licence as not agreed.
 //! - `FAKE_FM_START_DELAY_MS`: wait before listening (a slow start).
 //!
 //! Per-request behaviour comes from a magic word in the last message:
@@ -14,7 +15,8 @@
 //! Like the real server, it streams unless the request has `"stream": false`.
 //! Structured-output requests get a value that fits the schema (`null` for
 //! nullable fields), and a message with an image gets `Fake text read from
-//! an image.`. `count-tokens -q` (4 chars per token) is also faked.
+//! an image.`. `count-tokens -q` (4 chars per token), `license --status` and
+//! `available` are also faked.
 
 // A test helper: failing loudly is the right behaviour.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -40,8 +42,12 @@ async fn main() {
     let socket = match args.as_slice() {
         [_, cmd, flag, path] if cmd == "serve" && flag == "--socket" => PathBuf::from(path),
         [_, cmd, ..] if cmd == "count-tokens" => count_tokens(),
+        [_, cmd, flag] if cmd == "license" && flag == "--status" => license_status(),
+        [_, cmd] if cmd == "available" => available(),
         _ => {
-            eprintln!("usage: fake-fm serve --socket <path> | count-tokens -q");
+            eprintln!(
+                "usage: fake-fm serve --socket <path> | count-tokens -q | license --status | available"
+            );
             std::process::exit(2);
         }
     };
@@ -224,6 +230,27 @@ fn count_tokens() -> ! {
         std::process::exit(1);
     }
     println!("{}", input.chars().count().div_ceil(4));
+    std::process::exit(0);
+}
+
+/// Real output when agreed (2026-10-06). The not-agreed text is made up:
+/// the real one is untested.
+fn license_status() -> ! {
+    if std::env::var("FAKE_FM_LICENSE").as_deref() == Ok("false") {
+        println!("Not agreed.");
+        std::process::exit(1);
+    }
+    println!("Agreed to license FM1 version 1.0 on 6 Oct 2026 at 15:34.");
+    std::process::exit(0);
+}
+
+/// Real output when ready (2026-10-06). The unavailable text is made up.
+fn available() -> ! {
+    if std::env::var("FAKE_FM_AVAILABLE").as_deref() == Ok("false") {
+        println!("System model unavailable.");
+        std::process::exit(1);
+    }
+    println!("System model available");
     std::process::exit(0);
 }
 

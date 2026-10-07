@@ -3,8 +3,10 @@
 
 mod backend;
 mod chunk;
+mod doctor;
 mod fm;
 mod guidance;
+mod install;
 mod orphans;
 mod schema;
 mod server;
@@ -35,9 +37,26 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Configure Claude Code and Codex to use fm-mcp (not implemented yet).
-    Install,
-    /// Check everything fm-mcp needs and explain what is missing (not implemented yet).
+    /// Configure Claude Code and Codex to use fm-mcp. With no flags, configures
+    /// every agent it finds. Backs up each file it changes and prints its path.
+    Install {
+        /// Configure Claude Code only (plus `--codex` for both).
+        #[arg(long)]
+        claude: bool,
+        /// Configure Codex only (plus `--claude` for both).
+        #[arg(long)]
+        codex: bool,
+        /// Show what would change, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Remove everything `install` added.
+        #[arg(long)]
+        uninstall: bool,
+        /// Skip the Claude Code skill and the Codex AGENTS.md rules.
+        #[arg(long)]
+        no_guidance: bool,
+    },
+    /// Check everything fm-mcp needs and explain how to fix what is missing.
     Doctor,
     /// Internal: started by fm-mcp next to each `fm serve`. Stops it if fm-mcp
     /// is force-killed and can't clean up.
@@ -69,19 +88,37 @@ fn main() -> Result<()> {
         orphans::watch(*parent, *child, socket_dir);
         return Ok(());
     }
+    if let Some(Command::Install {
+        claude,
+        codex,
+        dry_run,
+        uninstall,
+        no_guidance,
+    }) = cli.command
+    {
+        return install::run(install::Options {
+            claude,
+            codex,
+            dry_run,
+            uninstall,
+            no_guidance,
+        });
+    }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     let result = runtime.block_on(async {
         match cli.command {
-            None => serve().await,
-            Some(Command::Install) => anyhow::bail!("`fm-mcp install` is not implemented yet"),
-            Some(Command::Doctor) => anyhow::bail!("`fm-mcp doctor` is not implemented yet"),
-            Some(Command::Watch { .. }) => Ok(()),
+            None => serve().await.map(|()| true),
+            Some(Command::Doctor) => Ok(doctor::run().await),
+            Some(Command::Install { .. } | Command::Watch { .. }) => Ok(true),
         }
     });
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
-    result
+    if !result? {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 async fn serve() -> Result<()> {

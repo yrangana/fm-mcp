@@ -91,12 +91,22 @@ Probed on macOS 27, 2026-10-06; re-checked on macOS 27.0.1 (26A434), 2026-10-06.
 - `fm` has no `--version` flag.
 - Endpoints: `GET /health`, `GET /v1/models` (model id `system`), `POST /v1/chat/completions`.
 
+## Verified facts about the agents' config
+
+Checked 2026-10-08 with Claude Code 2.1.293, in a scratch `HOME`.
+
+- **`claude mcp add -s user <name> -- <command>`** writes `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json` when that is set, as `mcpServers.<name> = {"type": "stdio", "command", "args", "env": {}}`. It honours `HOME`. It also saves its own copy under `~/.claude/backups/`.
+- **`add` exits 1** with *"MCP server … already exists in user config"* if the name is taken, so `install` removes a stale entry first. **`claude mcp remove <name> -s user`** exits 1 with *"No MCP server named …"* if it is missing.
+- **`~/.claude.json` is written with 2-space indents and no final newline.** `install` keeps that layout and the key order when it edits the file directly (no `claude` on `PATH`).
+- **Codex is not yet verified on a real install.** `config.toml` and the AGENTS override rule come from the Codex docs (plan N5). Check them in Phase 6.
+
 ## Development
 
 - **Run tests with `cargo test --features fake-fm`.** The feature builds `fake-fm` (`tests/fake_fm/fake_fm.rs`), a fake `fm serve` the integration tests use, so they need no Apple Intelligence. Plain `cargo test` fails on purpose with that instruction.
 - **Lint:** `cargo clippy --all-targets --all-features -- -D warnings` and `cargo fmt --check`. CI (`.github/workflows/ci.yml`) runs all three on macOS arm64.
-- **The fake is driven by** environment variables (`FAKE_FM_AVAILABLE`, `FAKE_FM_START_DELAY_MS`, `FAKE_FM_LOG`) and magic words in the prompt (`FAKE_OVERFLOW`, `FAKE_GUARDRAIL`, `FAKE_BAD_REQUEST`, `FAKE_HANG`, `FAKE_CRASH`, `FAKE_CRASH_ONCE`). When `fm` shows new behaviour, record it in the verified facts above and teach the fake.
+- **The fake is driven by** environment variables (`FAKE_FM_AVAILABLE`, `FAKE_FM_LICENSE`, `FAKE_FM_START_DELAY_MS`, `FAKE_FM_LOG`) and magic words in the prompt (`FAKE_OVERFLOW`, `FAKE_GUARDRAIL`, `FAKE_BAD_REQUEST`, `FAKE_HANG`, `FAKE_CRASH`, `FAKE_CRASH_ONCE`). When `fm` shows new behaviour, record it in the verified facts above and teach the fake.
 - **Settings:** `FM_MCP_FM_PATH` (default `/usr/bin/fm`), `FM_MCP_REQUEST_TIMEOUT_SECS` (default 120), `FM_MCP_LOG` (log filter, default `info,rmcp=warn`). Logs go to stderr only; stdout is the MCP protocol.
+- **`install` and `doctor`** (`src/install/`, `src/doctor.rs`) are tested in `tests/install.rs` against a scratch `HOME` with `PATH` limited to `/usr/bin:/bin`, so the real `claude` and your real config are never touched. A fake `claude` script stands in when a test needs one. To try them by hand, set `HOME` to a scratch folder too, or use `--dry-run`.
 - **Delegation guidance** lives in `skills/fm-delegate/SKILL.md` (Claude Code skill) and `snippets/AGENTS.md.snippet` (Codex). Both are embedded in the binary by `src/guidance.rs`. Change them only after testing decisions with sub-agents before and after (see the plan's Phase 4 notes), and keep their size limits in step with the `summarise` description.
 - **Tool schemas must be portable:** one `type` per field and no `$ref`. A unit test enforces this for every tool.
 

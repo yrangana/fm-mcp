@@ -3,28 +3,12 @@
 //! AGENTS.md block for Codex.
 
 /// `skills/fm-delegate/SKILL.md`, installed as `~/.claude/skills/fm-delegate/SKILL.md`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "written by `fm-mcp install` (Phase 5)")
-)]
 pub const SKILL: &str = include_str!("../skills/fm-delegate/SKILL.md");
 
 /// The block inserted into Codex's global AGENTS.md, between the markers below.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "written by `fm-mcp install` (Phase 5)")
-)]
 pub const AGENTS_SNIPPET: &str = include_str!("../snippets/AGENTS.md.snippet");
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `fm-mcp install` (Phase 5)")
-)]
 pub const BEGIN_MARKER: &str = "<!-- fm-mcp:begin";
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by `fm-mcp install` (Phase 5)")
-)]
 pub const END_MARKER: &str = "<!-- fm-mcp:end -->";
 
 #[cfg(test)]

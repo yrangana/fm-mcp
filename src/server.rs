@@ -60,7 +60,8 @@ const STRUCTURED_TIMEOUT: Duration = Duration::from_secs(30);
 /// Tokens set aside for instructions in `extract` and `classify` calls.
 const STRUCTURED_INSTRUCTION_TOKENS: usize = 200;
 const EXTRACT_OUTPUT_TOKENS: u32 = 1000;
-const CLASSIFY_OUTPUT_TOKENS: u32 = 200;
+/// A 50-label `multi` answer measured 394 tokens (2026-10-07).
+const CLASSIFY_OUTPUT_TOKENS: u32 = 500;
 const MAX_LABELS: usize = 50;
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 const OCR_PROMPT: &str =
@@ -238,7 +239,7 @@ impl FmMcp {
         let schema = if params.multi {
             json!({"type": "object", "properties": {"labels": {
                 "type": "array", "items": {"type": "string", "enum": labels},
-                "maxItems": params.labels.len()}}, "required": ["labels"]})
+                "minItems": 1, "maxItems": params.labels.len()}}, "required": ["labels"]})
         } else {
             json!({"type": "object", "properties": {"label": {"type": "string", "enum": labels}},
                    "required": ["label"]})
@@ -468,13 +469,22 @@ fn too_long_for_summarise(tokens: Option<usize>) -> String {
     )
 }
 
-/// One "- " bullet per non-empty line. The model sometimes doubles the marker ("- - ").
+/// One "- " bullet per non-empty line. The model sometimes doubles the marker
+/// ("- - "), so up to two markers are removed; a third `-` is kept, since it may
+/// be a minus sign ("- -5 °C" stays "- -5 °C").
 fn normalise_bullets(summary: &str) -> String {
+    fn strip_marker(line: &str) -> &str {
+        let line = line.trim_start();
+        match line.strip_prefix(['-', '*', '•']) {
+            Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
+                rest.trim_start()
+            }
+            _ => line,
+        }
+    }
     summary
         .lines()
-        .map(|line| {
-            line.trim_start_matches(|c: char| matches!(c, '-' | '*' | '•') || c.is_whitespace())
-        })
+        .map(|line| strip_marker(strip_marker(line)))
         .filter(|line| !line.is_empty())
         .map(|line| format!("- {line}"))
         .collect::<Vec<_>>()
@@ -659,6 +669,11 @@ mod tests {
             normalise_bullets("- - first\n\n- second\n* third"),
             "- first\n- second\n- third"
         );
+    }
+
+    #[test]
+    fn normalise_bullets_should_keep_a_leading_minus_sign() {
+        assert_eq!(normalise_bullets("- -5 °C overnight"), "- -5 °C overnight");
     }
 
     #[test]

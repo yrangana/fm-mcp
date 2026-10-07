@@ -2,7 +2,7 @@
 
 An MCP server that lets coding agents such as Claude Code and Codex hand simple text work to the on-device model for Apple Foundation Models, the `fm` that ships with macOS 27. It's free, private, and runs offline.
 
-> **Status: in development, not released yet.** It works from source today with four tools: `summarise`, `extract`, `classify` and `ocr`. Homebrew installation and automatic agent setup are being built. See [Roadmap](#roadmap).
+> **Status: in development, not released yet.** It works from source today with four tools, `summarise`, `extract`, `classify` and `ocr`, plus `fm-mcp install` and `fm-mcp doctor`. Homebrew installation is being built. See [Roadmap](#roadmap).
 
 ## Why
 
@@ -26,10 +26,14 @@ Coding agents spend paid, remote tokens on simple jobs, like summarising a log o
 git clone https://github.com/yrangana/fm-mcp.git
 cd fm-mcp
 cargo build --release
-claude mcp add -s local fm-mcp-dev -- "$(pwd)/target/release/fm-mcp"
+./target/release/fm-mcp install --dry-run   # shows what would change
+./target/release/fm-mcp install             # configures Claude Code and Codex
+./target/release/fm-mcp doctor              # checks everything fm-mcp needs
 ```
 
-Then ask Claude Code, for example, to "summarise this log with fm-mcp" or "read the text in this screenshot with fm-mcp". fm-mcp starts `fm serve` on its own the first time a tool is called, and stops it when the session ends.
+`install` configures every agent it finds; `--claude` or `--codex` picks one. It backs up each file before changing it, prints every path it touched, and running it again changes nothing. It also installs a Claude Code skill and an AGENTS.md section for Codex that say when to delegate; `--no-guidance` skips them. `fm-mcp install --uninstall` removes everything it added.
+
+Then start a new session and ask Claude Code, for example, to "summarise this log with fm-mcp" or "read the text in this screenshot with fm-mcp". fm-mcp starts `fm serve` on its own the first time a tool is called, and stops it when the session ends.
 
 ## Development
 
@@ -45,8 +49,8 @@ cargo fmt --check
 
 - [x] `summarise` over `fm serve`, with restarts, clear errors and clean shutdown
 - [x] `extract` (JSON Schema), `classify`, `ocr`; long input for `summarise`
-- [ ] Guidance that tells agents when to delegate (a Claude Code skill and an AGENTS.md snippet)
-- [ ] `fm-mcp install` (sets up Claude Code and Codex) and `fm-mcp doctor`
+- [x] Guidance that tells agents when to delegate (a Claude Code skill and an AGENTS.md snippet)
+- [x] `fm-mcp install` (sets up Claude Code and Codex) and `fm-mcp doctor`. The Codex setup still needs a check on a real Codex install.
 - [ ] Release: Homebrew (`brew install yrangana/tap/fm-mcp`), a shell installer, the MCP Registry and a Claude plugin
 
 ## Licence

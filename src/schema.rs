@@ -103,6 +103,15 @@ fn rewrite(
     }
 
     let (kind, nullable) = node_type(node, path)?;
+    // Scalars become nullable anyway. A nullable object or array is untested
+    // with the model, so ask for the plain type instead of silently dropping null.
+    if nullable && matches!(kind.as_deref(), Some("object" | "array")) {
+        return Err(format!(
+            "{}: a nullable object or array is not supported; use the plain type \
+             (an empty array or null fields already mean \"not found\")",
+            show(path)
+        ));
+    }
     let mut out = object.clone();
     out.remove("$schema");
     out.remove("title");
@@ -139,7 +148,6 @@ fn rewrite(
             Ok(Value::Object(out))
         }
         Some(scalar) if SCALARS.contains(&scalar) => {
-            let _ = nullable; // scalars always become nullable
             out.insert("type".into(), json!(scalar));
             let description = out.remove("description");
             let mut wrapped = json!({
@@ -337,11 +345,11 @@ mod tests {
     }
 
     #[test]
-    fn prepare_should_require_every_property() {
+    fn prepare_should_require_every_property_in_the_schemas_order() {
         let prepared = prepare(&invoice_schema()).unwrap();
         assert_eq!(
             prepared["required"],
-            json!(["invoice", "items", "status", "total"])
+            json!(["invoice", "total", "status", "items"])
         );
     }
 
@@ -372,6 +380,17 @@ mod tests {
             prepare(&schema)
                 .unwrap_err()
                 .starts_with("schema field `id`: `minLength` is not supported")
+        );
+    }
+
+    #[test]
+    fn prepare_should_reject_a_nullable_array() {
+        let schema = json!({"type": "object", "properties": {
+            "tags": {"type": ["array", "null"], "items": {"type": "string"}}}});
+        assert!(
+            prepare(&schema)
+                .unwrap_err()
+                .starts_with("schema field `tags`: a nullable object or array")
         );
     }
 
