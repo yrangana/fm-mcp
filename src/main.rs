@@ -2,9 +2,12 @@
 //! the on-device model for Apple Foundation Models, through the `fm` CLI.
 
 mod backend;
+mod chunk;
 mod fm;
 mod orphans;
+mod schema;
 mod server;
+mod summarise;
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 

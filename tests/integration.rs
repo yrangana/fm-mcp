@@ -59,7 +59,13 @@ fn server_should_start_fm_serve_only_on_first_tool_call() {
 fn server_should_answer_tools_list_even_when_fm_is_missing() {
     let mut server = Server::start(&[("FM_MCP_FM_PATH", "/nonexistent/fm")]);
     let response = server.request("tools/list", json!({}));
-    assert_eq!(response["result"]["tools"][0]["name"], json!("summarise"));
+    let names: Vec<&str> = response["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert_eq!(names.len(), 4, "{names:?}");
 }
 
 #[test]
@@ -180,7 +186,7 @@ fn missing_fm_binary_should_become_a_tool_error() {
     assert!(
         result.is_error
             && result.text.starts_with(
-                "The on-device model server could not start: could not run `/nonexistent/fm serve`"
+                "The on-device model server could not start: could not run `/nonexistent/fm"
             ),
         "{}",
         result.text
@@ -339,4 +345,203 @@ fn wait_until(limit: Duration, condition: impl Fn() -> bool) -> bool {
         std::thread::sleep(Duration::from_millis(20));
     }
     condition()
+}
+
+// --- Phase 3 tools -------------------------------------------------------------
+
+#[test]
+fn long_summarise_should_split_combine_and_report_progress() {
+    // The fake counts 4 characters per token: ~40K characters is ~10K tokens.
+    let mut server = Server::start(&[]);
+    let text = "The cache was cold after the deploy, so requests were slow. ".repeat(700);
+    let result = server.call_tool_with_params(json!({
+        "name": "summarise",
+        "arguments": {"text": text},
+        "_meta": {"progressToken": "p1"}
+    }));
+    let progress = server
+        .notifications
+        .iter()
+        .filter(|n| n["method"] == json!("notifications/progress"))
+        .count();
+    assert!(
+        !result.is_error && result.text.contains("summarised in 2 parts") && progress == 3,
+        "progress={progress}: {}",
+        result.text
+    );
+}
+
+#[test]
+fn summarise_over_the_cap_should_be_refused_quickly_without_the_model() {
+    let mut server = Server::start(&[]);
+    let text = "x".repeat(200_000); // 50K tokens at 4 chars per token
+    let started = std::time::Instant::now();
+    let result = server.summarise(&text);
+    assert!(
+        result.is_error
+            && result
+                .text
+                .starts_with("Input is too long to summarise (50000 tokens")
+            && server.fake_starts() == 0
+            && started.elapsed() < Duration::from_secs(1),
+        "{}",
+        result.text
+    );
+}
+
+#[test]
+fn extract_should_return_json_matching_the_schema() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "extract",
+        json!({"text": "Invoice INV-7 total $5", "schema": {"type": "object", "properties": {
+            "invoice": {"type": "string"}, "status": {"enum": ["paid", "unpaid"]}}}}),
+    );
+    // The fake answers null for nullable fields and the first enum value otherwise.
+    assert_eq!(
+        (result.is_error, result.structured),
+        (false, Some(json!({"invoice": null, "status": "paid"})))
+    );
+}
+
+#[test]
+fn extract_should_send_a_nullable_schema_with_unique_titles() {
+    let mut server = Server::start(&[]);
+    server.call_tool(
+        "extract",
+        json!({"text": "x", "schema": {"type": "object", "properties": {"total": {"type": "number"}}}}),
+    );
+    let request: Value = server
+        .fake_log()
+        .iter()
+        .find_map(|l| l.strip_prefix("request "))
+        .map(|l| serde_json::from_str(l).unwrap())
+        .unwrap();
+    assert_eq!(
+        request["response_format"]["json_schema"]["schema"]["properties"]["total"],
+        json!({"title": "Total", "anyOf": [{"type": "number"}, {"type": "null"}]})
+    );
+}
+
+#[test]
+fn extract_should_reject_an_unsupported_schema_without_the_model() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "extract",
+        json!({"text": "x", "schema": {"type": "object", "properties": {"id": {"type": "string", "pattern": "^A"}}}}),
+    );
+    assert!(
+        result.is_error
+            && result
+                .text
+                .starts_with("Unusable schema: schema field `id`: `pattern` can't be used")
+            && server.fake_starts() == 0,
+        "{}",
+        result.text
+    );
+}
+
+#[test]
+fn extract_should_refuse_input_over_one_call() {
+    let mut server = Server::start(&[]);
+    // 7,000 tokens at 4 chars per token: under the length pre-check, over the counted budget.
+    let text = "word ".repeat(5600);
+    let result = server.call_tool(
+        "extract",
+        json!({"text": text, "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}),
+    );
+    assert!(
+        result.is_error
+            && result
+                .text
+                .starts_with("Input is too long for the on-device model (7000 tokens"),
+        "{}",
+        result.text
+    );
+}
+
+#[test]
+fn extract_runaway_should_become_a_stuck_error() {
+    let mut server = Server::start(&[("FM_MCP_REQUEST_TIMEOUT_SECS", "1")]);
+    let result = server.call_tool(
+        "extract",
+        json!({"text": "FAKE_HANG", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}),
+    );
+    assert!(
+        result.is_error
+            && result
+                .text
+                .starts_with("The on-device model got stuck and was stopped."),
+        "{}",
+        result.text
+    );
+}
+
+#[test]
+fn classify_should_return_one_of_the_labels() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "classify",
+        json!({"text": "The app crashes on launch", "labels": ["bug", "feature", "question"]}),
+    );
+    assert_eq!(result.structured, Some(json!({"label": "bug"})));
+}
+
+#[test]
+fn classify_multi_should_return_a_list_of_labels() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "classify",
+        json!({"text": "Crash and a feature idea", "labels": ["bug", "feature"], "multi": true}),
+    );
+    assert_eq!(result.structured, Some(json!({"labels": ["bug"]})));
+}
+
+#[test]
+fn classify_should_reject_bad_labels_without_the_model() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool("classify", json!({"text": "x", "labels": ["only one"]}));
+    assert_eq!(
+        (result.is_error, result.text.as_str(), server.fake_starts()),
+        (true, "Give between 2 and 50 labels (got 1).", 0)
+    );
+}
+
+#[test]
+fn ocr_should_read_an_image_through_fm_serve() {
+    let dir = tempfile::tempdir().unwrap();
+    let image = dir.path().join("shot.png");
+    std::fs::write(&image, b"\x89PNG\r\n\x1a\nfake").unwrap();
+    let mut server = Server::start(&[]);
+    let result = server.call_tool("ocr", json!({"path": image}));
+    assert_eq!(
+        (result.is_error, result.text.as_str()),
+        (false, "Fake text read from an image.")
+    );
+}
+
+#[test]
+fn ocr_should_reject_a_missing_file_without_the_model() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool("ocr", json!({"path": "/nonexistent/shot.png"}));
+    assert!(
+        result.is_error
+            && result
+                .text
+                .starts_with("Cannot read `/nonexistent/shot.png`")
+            && server.fake_starts() == 0,
+        "{}",
+        result.text
+    );
+}
+
+#[test]
+fn ocr_should_refuse_pdfs_with_advice() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool("ocr", json!({"path": "/tmp/page.pdf"}));
+    assert!(
+        result.is_error && result.text.starts_with("PDFs are not supported"),
+        "{}",
+        result.text
+    );
 }

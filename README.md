@@ -2,7 +2,7 @@
 
 An MCP server that lets coding agents such as Claude Code and Codex hand simple text work to the on-device model for Apple Foundation Models, the `fm` that ships with macOS 27. It's free, private, and runs offline.
 
-> **Status: in development, not released yet.** It works from source today with one tool, `summarise`. Installation through Homebrew, more tools and agent setup are being built. See [Roadmap](#roadmap).
+> **Status: in development, not released yet.** It works from source today with four tools: `summarise`, `extract`, `classify` and `ocr`. Homebrew installation and automatic agent setup are being built. See [Roadmap](#roadmap).
 
 ## Why
 
@@ -10,7 +10,7 @@ Coding agents spend paid, remote tokens on simple jobs, like summarising a log o
 
 ## Good for, and not for
 
-- **Good for:** condensing logs, documents, notes and transcripts.
+- **Good for:** summarising logs, documents, notes and transcripts; pulling fields out of text as JSON; sorting text into your categories; reading text in screenshots and photos.
 - **Not for:** code, maths, reasoning, facts the text doesn't contain, or anything where a wrong answer is costly and you can't check it.
 - **Limits:** the model has a small context of about 8K tokens, shared by your input and its answer. Summaries can miss or distort details, so check anything important.
 
@@ -29,7 +29,7 @@ cargo build --release
 claude mcp add -s local fm-mcp-dev -- "$(pwd)/target/release/fm-mcp"
 ```
 
-Then ask Claude Code to "summarise this file with fm-mcp". fm-mcp starts `fm serve` on its own the first time a tool is called, and stops it when the session ends.
+Then ask Claude Code, for example, to "summarise this log with fm-mcp" or "read the text in this screenshot with fm-mcp". fm-mcp starts `fm serve` on its own the first time a tool is called, and stops it when the session ends.
 
 ## Development
 
@@ -44,7 +44,7 @@ cargo fmt --check
 ## Roadmap
 
 - [x] `summarise` over `fm serve`, with restarts, clear errors and clean shutdown
-- [ ] `extract` (JSON Schema), `classify`, `ocr`; long input for `summarise`
+- [x] `extract` (JSON Schema), `classify`, `ocr`; long input for `summarise`
 - [ ] Guidance that tells agents when to delegate (a Claude Code skill and an AGENTS.md snippet)
 - [ ] `fm-mcp install` (sets up Claude Code and Codex) and `fm-mcp doctor`
 - [ ] Release: Homebrew (`brew install yrangana/tap/fm-mcp`), a shell installer, the MCP Registry and a Claude plugin

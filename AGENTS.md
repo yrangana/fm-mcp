@@ -32,7 +32,7 @@ Other Apple FM MCP servers exist, all Python and clone-to-install. What sets thi
 - **Rust**, MCP via the official `rmcp` SDK, **stdio** transport.
 - **Model access through `fm serve`**, which fm-mcp spawns as a child process on a Unix socket, supervises, and shuts down on exit.
 - **Orphan protection.** Each `fm serve` gets a watchdog, a hidden `fm-mcp __watch` mode of the same binary. If fm-mcp is force-killed and cannot clean up, the watchdog stops `fm serve` and deletes its socket folder. At startup, fm-mcp also stops any of the user's orphaned `fm serve --socket …/fm-mcp-*/fm.sock` processes (parent pid 1) and deletes stale `fm-mcp-*` folders. Code: `src/orphans.rs`.
-- **`fm` CLI only for what `serve` cannot do:** OCR and barcode (`fm respond --tool ocr|barcode`) and token counting (`fm count-tokens -q`).
+- **`fm` CLI only for what `serve` cannot do:** token counting (`fm count-tokens -q`). OCR goes through `fm serve` vision, which tested better than `fm respond --tool ocr` (see verified facts).
 - **No Swift bridge, no SDK.** There is no Rust SDK for FoundationModels; bridging to Swift is not worth the build cost.
 - **Backend behind a trait**, so Ollama or Foundry Local can be added later (both speak the same Chat Completions format). v1 ships the `fm` backend only.
 
@@ -50,6 +50,7 @@ Probed on macOS 27, 2026-10-06; re-checked on macOS 27.0.1 (26A434), 2026-10-06.
 - **Guardrails** → HTTP 500, message *"The model's safety guardrails were triggered."* Fires on benign input too.
   - *(2026-10-06)* Repeated text did not trigger it within the context limit: one sentence repeated 300 times, about 5.4K tokens, passed.
   - An input far over the limit (about 14K tokens of repeated text) returned the guardrail error *instead of* the overflow error. Do not rely on the error type to detect oversized input; count tokens first.
+- **No log probabilities** *(probed 2026-10-07)*. `logprobs: true` with `top_logprobs: 5` returns HTTP 200 but no `logprobs` field, for plain and structured (`enum`) answers alike. A `logprobs` value of the wrong type is also accepted, so the field is ignored. Streaming chunks carry text only, and `fm respond --verbose` shows no probabilities. There is no way to get per-option probabilities or a confidence score from `fm`.
 - **Unknown request fields are accepted silently** (e.g. `"guardrails": "..."`), so there is no evidence `serve` exposes a guardrail setting. `fm respond` does have `--guardrails permissive-content-transformations` *(2026-10-06)*.
 - **Requests are processed one at a time** *(2026-10-06)*. Three parallel requests finished at 5.6s, 8.2s and 11.0s. One summary of 3.7K tokens takes about 3.7s.
 - **Several `fm serve` processes also queue; they don't run in parallel or fail** *(2026-10-06)*. Each process had its own socket, which is what separate fm-mcp sessions would do.
@@ -60,7 +61,31 @@ Probed on macOS 27, 2026-10-06; re-checked on macOS 27.0.1 (26A434), 2026-10-06.
 - **Unix socket paths must be short** (macOS limit 104 bytes). A long path fails silently: `fm serve` keeps running and prints nothing, but no socket file is created. Re-confirmed 2026-10-06 with a 169-byte path. `$TMPDIR/fm-mcp.sock` is about 60 bytes here. Check the length.
 - **`fm serve` prints nothing on startup** (stdout and stderr redirected). Poll `GET /health` for readiness; it returns `{"models":[{"available":true,"name":"system"}],"status":"fm serve is running"}` *(2026-10-06)*.
 - Non-streaming responses include `usage` token counts. `prompt_tokens` is about 55–60 more than `fm count-tokens -q` on the text alone, which is the chat framing overhead.
-- **OCR:** `fm respond --no-stream --tool ocr --image <file> '<prompt>'` works *(2026-10-06)*.
+- **Measured through fm-mcp on 2026-10-07 (macOS 27.0.1):**
+  - `summarise` on a 30,288-token log took 86.9 s: 5 parts, then combined, with 6 progress updates. A second run with different prompts took 130 s. The summary kept 2 of 3 planted incidents exactly; the third was lost when summarising its part (see plan R12).
+  - `extract`: 1.2 s for 3 fields and 2.0 s with an array of line items. A field missing from the text came back as `null` with the nullable rewrite, with no runaway.
+  - `classify`: 0.5 s per call. Over 20 varied support messages with 4 labels, 20 of 20 answers were valid labels and 18 of 20 were the expected label.
+  - `ocr`: about 2.1 s per image. 30 of 30 known phrases across the 5 test images.
+- **Token density varies a lot by text type** *(measured 2026-10-07)*. Characters per token: prose (AGENTS.md) 3.5, Rust code 3.5, random dictionary words 4.2, timestamped logs with IDs and numbers **1.6**. A fixed characters-per-token estimate undercounts logs by more than half, so always count real tokens. `fm count-tokens -q` over stdin takes about 0.08 s (1.3 s on the first, cold call). Empty input fails with *"Missing prompt."*, so never send empty text.
+- **Structured output: which JSON Schema features work** *(probed 2026-10-07 on a short invoice)*.
+  - **Work:** flat objects (string, number, integer, boolean), nested objects, arrays of strings, arrays of objects, `enum`, `const`, `minItems`/`maxItems`, `additionalProperties: false`, and a top-level array (messy output).
+  - **`anyOf`:** needs a `title` on the property that holds it, e.g. `{"title": "Total", "anyOf": [...]}`; without one, HTTP 400 *"AnyOf schemas require a 'title' key"*. Titles on the branches don't help.
+  - **Rejected with HTTP 400:** `$ref` (both `#/$defs/…` and `#/definitions/…`: *"undefinedReferences"*), and nullable type arrays such as `["string", "null"]`.
+  - **`pattern`:** HTTP 500 *"An unsupported generation guide was used."*
+  - **`format: "date"`:** accepted but ignored ("2 April 2026" came back).
+  - **`minimum`/`maximum`:** enforced by bending the answer. With `maximum: 5` the total came back as `4.5` (true value 71.5). Constraints don't validate; they force a wrong value.
+- **Structured output can run away when the text lacks a requested field** *(2026-10-07)*. The model fills the string with junk until the context overflows. In 3 of 4 runs that took about 200 s and ended in the overflow error; the 4th returned junk (`"not available', 1, 2026-03-03, "`). This happened with optional and required fields, and with "or empty string if none" in the field description. An array of objects ran away once and worked in 2 s another time. A tool that uses structured output must cap `max_tokens` and must not let a missing field look like a real value.
+  - **`max_tokens` does not stop a runaway** *(2026-10-07)*. With `max_tokens: 300`, both runs were still generating at 150 s.
+  - **`fm serve` keeps generating after the client disconnects**, so later requests queue behind a runaway. The only cure is restarting `fm serve`.
+  - **A "use NOT_FOUND if missing" instruction doesn't help.** It copied the wrong field's value, or junk.
+  - **What works: `anyOf: [<type>, {"type": "null"}]` with a `title`.** Missing fields come back as `null`. On a flat schema with 4 present and 2 missing fields, 5 of 5 runs were exactly right, in about 1.4 s each. A `{found, value}` pair also worked, 2 of 2.
+  - **Titles must be unique and specific, e.g. `ItemSku`.** With short titles (`name`, `qty`) on two or more `anyOf` fields inside array items, 6 of 6 runs ran away. With path-style titles (`ItemName`, `ItemQty`, `ItemSku`), 4 of 4 were right.
+  - **Nested objects remain unreliable.** Even with unique titles, 1 of 2 runs ran away. In 2 runs the model put the email address into a missing `phone` field: a plausible but wrong value instead of `null`.
+- **OCR: plain vision through `fm serve` beats `fm respond --tool ocr`** *(compared 2026-10-07 on 5 images: a screenshot, small text, two columns, a receipt, handwriting-style text)*.
+  - **Vision via `fm serve`** (`image_url` data URL, prompt "Return all the text in this image exactly as written, line by line"): 30/30 known phrases, about 1.8 s per image, layout kept (receipt lines like `Flat white 4.80`), no preamble.
+  - **`fm respond --no-stream --tool ocr --image <file>`:** 28/30 known phrases, about 3.3 s per image. It garbled small text (`201 B`, `help¿@`), separated receipt prices from their items, and sometimes added "Here is the text…".
+  - **Image types accepted by `fm serve` vision:** PNG, JPEG, HEIC, TIFF, GIF and BMP, each with its own MIME type in the data URL; each read the receipt total correctly. WebP is untested.
+  - **PDF is not supported:** passing a PDF to `fm respond --image` fails with *"The prompt contains content that the model cannot process."*
 - **Licence gate:** `fm` has a Legal Notice that must be agreed once (`fm license`). `fm license --status` reports it. `fm available` prints *"System model available"* and exits 0 when the model is ready *(2026-10-06)*.
 - `fm` has no `--version` flag.
 - Endpoints: `GET /health`, `GET /v1/models` (model id `system`), `POST /v1/chat/completions`.
