@@ -6,11 +6,11 @@ Guidance for coding agents (Claude Code, Codex) working in this repository.
 
 **fm-mcp** — an MCP server that lets coding agents hand cheap, private, simple work to Apple's on-device Foundation Model (the `fm` that ships with macOS 27). Free, offline, one-command install.
 
-**There is no code yet.** Planning comes first, under `plans/`.
+**Status:** v1 is being built in phases; see `plans/active/FM_MCP_V1.md`. Phase 1 (stdio server with `summarise` over `fm serve`) is on branch `phase-1-scaffold`.
 
 ## The goal
 
-A developer runs `brew install <owner>/tap/fm-mcp && fm-mcp install`, and Claude Code and Codex can immediately delegate summarising, extraction, classification and OCR to the local model — without Python, cloning, or hand-editing config.
+A developer runs `brew install yrangana/tap/fm-mcp && fm-mcp install`, and Claude Code and Codex can immediately delegate summarising, extraction, classification and OCR to the local model — without Python, cloning, or hand-editing config.
 
 Other Apple FM MCP servers exist, all Python and clone-to-install. What sets this one apart:
 
@@ -23,7 +23,7 @@ Other Apple FM MCP servers exist, all Python and clone-to-install. What sets thi
 
 ## v1 scope
 
-- **Tools:** `summarise`, `extract` (JSON schema), `classify`, `ocr`, possibly a general `ask`.
+- **Tools:** `summarise`, `extract` (JSON schema), `classify`, `ocr`. No general `ask` tool in v1 (decided 2026-10-06: it invites over-delegation).
 - **Commands:** `fm-mcp` (stdio server), `fm-mcp install [--claude] [--codex]`, `fm-mcp doctor`.
 - **Requirements:** Apple Silicon, macOS 27, Apple Intelligence enabled.
 
@@ -74,7 +74,7 @@ Probed on macOS 27, 2026-10-06; re-checked on macOS 27.0.1 (26A434), 2026-10-06.
 
 ## Open decisions
 
-- **GitHub owner** for the repo and tap — undecided. Use `<owner>` as a placeholder; do not invent one.
+- **GitHub owner** — decided 2026-10-07: `yrangana`. Repo `github.com/yrangana/fm-mcp`, tap `yrangana/homebrew-tap`, MCP Registry name `io.github.yrangana/fm-mcp`.
 - **Licence** — proposed `MIT OR Apache-2.0`, not confirmed.
 
 ## Hard rules
