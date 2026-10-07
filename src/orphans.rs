@@ -81,10 +81,13 @@ pub fn clean_up(bases: &[PathBuf]) {
             orphan.pid,
             orphan.socket.display()
         );
-        stop(Pid::from_raw(orphan.pid));
+        // Folder first: if fm-mcp exits mid-clean-up (this runs in the
+        // background), a still-running orphan is found again next start, but
+        // a folder left after the orphan stopped would wait for the stale sweep.
         if let Some(dir) = orphan.socket.parent() {
             remove_socket_dir(dir);
         }
+        stop(Pid::from_raw(orphan.pid));
     }
     for base in bases {
         remove_stale_socket_dirs(base);
