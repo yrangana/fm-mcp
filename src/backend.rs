@@ -3,15 +3,19 @@
 //! Every backend speaks the Chat Completions format, so Ollama or Foundry Local
 //! can be added later behind the same trait. v1 ships only the `fm serve` backend.
 
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, time::Duration};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// A model that answers Chat Completions requests.
 pub trait Backend: Send + Sync {
     fn chat(&self, request: ChatRequest) -> BoxFuture<'_, Result<ChatResponse, BackendError>>;
+
+    /// Counts the tokens `text` uses as a prompt. `text` must not be empty.
+    fn count_tokens<'a>(&'a self, text: &'a str) -> BoxFuture<'a, Result<usize, BackendError>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -24,21 +28,54 @@ pub enum Role {
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub role: Role,
-    pub content: String,
+    pub content: Content,
+}
+
+/// Plain text, or text plus images (sent as base64 data URLs).
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum Content {
+    Text(String),
+    Parts(Vec<Value>),
+}
+
+impl Content {
+    /// The text of the message, or of its first text part.
+    #[cfg(test)]
+    pub fn text(&self) -> &str {
+        match self {
+            Self::Text(text) => text,
+            Self::Parts(parts) => parts
+                .iter()
+                .find_map(|p| p["text"].as_str())
+                .unwrap_or_default(),
+        }
+    }
 }
 
 impl ChatMessage {
     pub fn system(content: impl Into<String>) -> Self {
         Self {
             role: Role::System,
-            content: content.into(),
+            content: Content::Text(content.into()),
         }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: Role::User,
-            content: content.into(),
+            content: Content::Text(content.into()),
+        }
+    }
+
+    /// A user message with a prompt and one image, e.g. `data:image/png;base64,...`.
+    pub fn user_with_image(prompt: impl Into<String>, data_url: String) -> Self {
+        Self {
+            role: Role::User,
+            content: Content::Parts(vec![
+                json!({"type": "text", "text": prompt.into()}),
+                json!({"type": "image_url", "image_url": {"url": data_url}}),
+            ]),
         }
     }
 }
@@ -54,6 +91,11 @@ pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<Value>,
+    /// Overrides the backend's default timeout for this request (not sent).
+    #[serde(skip)]
+    pub timeout: Option<Duration>,
 }
 
 impl ChatRequest {
@@ -63,11 +105,27 @@ impl ChatRequest {
             stream: false,
             messages,
             max_tokens: None,
+            response_format: None,
+            timeout: None,
         }
     }
 
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    /// Constrains the answer to JSON matching `schema` (structured output).
+    pub fn with_json_schema(mut self, name: &str, schema: Value) -> Self {
+        self.response_format = Some(json!({
+            "type": "json_schema",
+            "json_schema": {"name": name, "schema": schema}
+        }));
+        self
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
         self
     }
 }
@@ -119,6 +177,8 @@ pub enum BackendError {
     Connection(String),
     #[error("the model server crashed {0} times in the last minute")]
     CrashLoop(usize),
+    #[error("could not count tokens: {0}")]
+    CountFailed(String),
     #[error("the model did not answer within {0} s")]
     Timeout(u64),
     #[error("unexpected response from the model server: {0}")]

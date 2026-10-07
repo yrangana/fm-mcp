@@ -47,6 +47,7 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL: Duration = Duration::from_millis(100);
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const STOP_GRACE: Duration = Duration::from_secs(2);
+const COUNT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Give up restarting after this many crashes within `CRASH_WINDOW`.
 const MAX_CRASHES: usize = 3;
 const CRASH_WINDOW: Duration = Duration::from_secs(60);
@@ -151,6 +152,10 @@ impl FmServe {
     /// child is replaced and the request retried once. Model calls have no side
     /// effects, so a retry is safe.
     async fn chat_inner(&self, request: ChatRequest) -> Result<ChatResponse, BackendError> {
+        // A tool's own timeout can only shorten the configured one.
+        let limit = request.timeout.map_or(self.config.request_timeout, |t| {
+            t.min(self.config.request_timeout)
+        });
         let body = serde_json::to_vec(&request)
             .map_err(|e| BackendError::BadResponse(format!("could not encode request: {e}")))?;
         let mut state = self.state.lock().await;
@@ -158,7 +163,7 @@ impl FmServe {
         for attempt in 1..=2 {
             let socket = self.ensure_running(&mut state).await?;
             let sent = timeout(
-                self.config.request_timeout,
+                limit,
                 http(&socket, Method::POST, "/v1/chat/completions", body.clone()),
             )
             .await;
@@ -179,15 +184,22 @@ impl FmServe {
                     // behind it, so replace it. A timeout is not counted as a crash.
                     warn!("fm serve timed out; replacing it");
                     state.running = None;
-                    return Err(BackendError::Timeout(self.config.request_timeout.as_secs()));
+                    return Err(BackendError::Timeout(limit.as_secs()));
                 }
             };
 
             if !status.is_success() {
                 return Err(BackendError::from_http(status.as_u16(), &bytes));
             }
-            return serde_json::from_slice(&bytes)
-                .map_err(|e| BackendError::BadResponse(e.to_string()));
+            let response: ChatResponse = serde_json::from_slice(&bytes)
+                .map_err(|e| BackendError::BadResponse(e.to_string()))?;
+            if let Some(usage) = response.usage {
+                debug!(
+                    "model used {} prompt + {} completion tokens",
+                    usage.prompt_tokens, usage.completion_tokens
+                );
+            }
+            return Ok(response);
         }
         Err(BackendError::Connection("fm serve is not running".into()))
     }
@@ -256,6 +268,54 @@ impl Backend for FmServe {
     fn chat(&self, request: ChatRequest) -> BoxFuture<'_, Result<ChatResponse, BackendError>> {
         Box::pin(self.chat_inner(request))
     }
+
+    fn count_tokens<'a>(&'a self, text: &'a str) -> BoxFuture<'a, Result<usize, BackendError>> {
+        Box::pin(count_tokens(&self.config.fm_path, text))
+    }
+}
+
+/// `fm count-tokens -q` with `text` on stdin. Fast (about 0.08 s), and it runs
+/// outside `fm serve`, so it doesn't wait behind model requests.
+async fn count_tokens(fm_path: &Path, text: &str) -> Result<usize, BackendError> {
+    use tokio::io::AsyncWriteExt;
+
+    let failed = |e: &dyn std::fmt::Display| BackendError::CountFailed(e.to_string());
+    let mut child = Command::new(fm_path)
+        .args(["count-tokens", "-q"])
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        // Same error as `fm serve` failing to run: `fm` itself is missing or broken.
+        .map_err(|e| {
+            BackendError::StartFailed(format!(
+                "could not run `{} count-tokens`: {e}",
+                fm_path.display()
+            ))
+        })?;
+    let mut stdin = child.stdin.take().ok_or_else(|| failed(&"no stdin"))?;
+    let input = text.to_owned();
+    // Write in the background so a full pipe can't deadlock with reading stdout.
+    let writer = tokio::spawn(async move {
+        let _ = stdin.write_all(input.as_bytes()).await;
+    });
+    let output = timeout(COUNT_TIMEOUT, child.wait_with_output())
+        .await
+        .map_err(|_| failed(&"timed out"))?
+        .map_err(|e| failed(&e))?;
+    let _ = writer.await;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(failed(&stderr.trim()));
+    }
+    stdout
+        .trim()
+        .parse()
+        .map_err(|_| failed(&format!("unexpected output {stdout:?}")))
 }
 
 impl Running {

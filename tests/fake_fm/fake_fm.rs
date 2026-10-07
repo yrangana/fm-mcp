@@ -12,6 +12,9 @@
 //! `FAKE_HANG` (never answer), `FAKE_CRASH` (exit mid-request), and
 //! `FAKE_CRASH_ONCE` (exit mid-request only the first time; needs `FAKE_FM_LOG`).
 //! Like the real server, it streams unless the request has `"stream": false`.
+//! Structured-output requests get a value that fits the schema (`null` for
+//! nullable fields), and a message with an image gets `Fake text read from
+//! an image.`. `count-tokens -q` (4 chars per token) is also faked.
 
 // A test helper: failing loudly is the right behaviour.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -36,8 +39,9 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
     let socket = match args.as_slice() {
         [_, cmd, flag, path] if cmd == "serve" && flag == "--socket" => PathBuf::from(path),
+        [_, cmd, ..] if cmd == "count-tokens" => count_tokens(),
         _ => {
-            eprintln!("usage: fake-fm serve --socket <path>");
+            eprintln!("usage: fake-fm serve --socket <path> | count-tokens -q");
             std::process::exit(2);
         }
     };
@@ -129,7 +133,22 @@ async fn chat(body: &[u8]) -> Response<Full<Bytes>> {
         );
     }
 
-    let content = format!("Fake summary of {} characters.", last.chars().count());
+    // Structured output: answer with a value that fits the schema.
+    let schema = &request["response_format"]["json_schema"]["schema"];
+    let has_image = request["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m["content"].as_array())
+        .flatten()
+        .any(|part| part["type"] == "image_url");
+    let content = if has_image {
+        "Fake text read from an image.".to_owned()
+    } else if schema.is_null() {
+        format!("Fake summary of {} characters.", last.chars().count())
+    } else {
+        fake_instance(schema).to_string()
+    };
     if request.get("stream") != Some(&Value::Bool(false)) {
         // The real server streams by default.
         let chunk = json!({"object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": content}}]});
@@ -150,6 +169,62 @@ async fn chat(body: &[u8]) -> Response<Full<Bytes>> {
             "usage": {"prompt_tokens": 60, "completion_tokens": 8, "total_tokens": 68}
         }),
     )
+}
+
+/// A small value that satisfies `schema`: the first `enum` option, `null` for
+/// nullable fields (as the real model does for missing data), and simple
+/// placeholders otherwise.
+fn fake_instance(schema: &Value) -> Value {
+    if let Some(first) = schema["enum"].as_array().and_then(|e| e.first()) {
+        return first.clone();
+    }
+    if let Some(value) = schema.get("const") {
+        return value.clone();
+    }
+    if let Some(options) = schema["anyOf"].as_array() {
+        return if options.iter().any(|o| o["type"] == "null") {
+            Value::Null
+        } else {
+            options.first().map(fake_instance).unwrap_or(Value::Null)
+        };
+    }
+    match schema["type"].as_str() {
+        Some("object") => {
+            let mut object = serde_json::Map::new();
+            if let Some(properties) = schema["properties"].as_object() {
+                for (name, property) in properties {
+                    object.insert(name.clone(), fake_instance(property));
+                }
+            }
+            Value::Object(object)
+        }
+        Some("array") => {
+            let count = schema["minItems"].as_u64().unwrap_or(1).max(1);
+            Value::Array(
+                (0..count)
+                    .map(|_| fake_instance(&schema["items"]))
+                    .collect(),
+            )
+        }
+        Some("string") => json!("fake"),
+        Some("integer") => json!(1),
+        Some("number") => json!(1.5),
+        Some("boolean") => json!(false),
+        _ => Value::Null,
+    }
+}
+
+/// `fake-fm count-tokens -q`: four characters per token, read from stdin.
+/// Like the real `fm`, empty input is an error.
+fn count_tokens() -> ! {
+    let mut input = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut input).unwrap();
+    if input.is_empty() {
+        eprintln!("Error: Missing prompt. Provide a positional prompt, --text, or --image option.");
+        std::process::exit(1);
+    }
+    println!("{}", input.chars().count().div_ceil(4));
+    std::process::exit(0);
 }
 
 fn error(status: u16, message: &str) -> Response<Full<Bytes>> {

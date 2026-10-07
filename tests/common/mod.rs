@@ -34,6 +34,8 @@ pub struct Server {
     stdout: BufReader<ChildStdout>,
     stderr: Arc<Mutex<String>>,
     next_id: u64,
+    /// Notifications fm-mcp sent (e.g. progress), in order.
+    pub notifications: Vec<Value>,
     dir: TempDir,
 }
 
@@ -45,6 +47,7 @@ pub struct FmServeChild {
 }
 
 pub struct ToolResult {
+    pub structured: Option<Value>,
     pub is_error: bool,
     pub text: String,
 }
@@ -87,6 +90,7 @@ impl Server {
             child,
             stderr,
             next_id: 1,
+            notifications: Vec::new(),
             dir,
         };
         server.request(
@@ -118,6 +122,9 @@ impl Server {
             if message["id"] == json!(id) {
                 return message;
             }
+            if message.get("id").is_none() {
+                self.notifications.push(message);
+            }
         }
     }
 
@@ -136,10 +143,16 @@ impl Server {
     }
 
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> ToolResult {
-        let response = self.request("tools/call", json!({"name": name, "arguments": arguments}));
+        self.call_tool_with_params(json!({"name": name, "arguments": arguments}))
+    }
+
+    /// Calls a tool with full `tools/call` params, e.g. to add `_meta`.
+    pub fn call_tool_with_params(&mut self, params: Value) -> ToolResult {
+        let response = self.request("tools/call", params);
         let result = &response["result"];
         assert!(!result.is_null(), "protocol error: {response}");
         ToolResult {
+            structured: result.get("structuredContent").cloned(),
             is_error: result["isError"].as_bool().unwrap_or(false),
             text: result["content"][0]["text"]
                 .as_str()

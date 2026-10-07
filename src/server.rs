@@ -1,33 +1,75 @@
 //! The MCP server and its tools.
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc, time::Duration};
 
+use base64::Engine;
 use rmcp::{
-    ErrorData as McpError, ServerHandler,
+    ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig},
-    schemars, tool, tool_handler, tool_router,
+    model::{
+        CallToolResult, ContentBlock, Implementation, ProgressNotificationParam, ProgressToken,
+        ServerCapabilities, ServerConfig,
+    },
+    schemars,
+    service::{Peer, RequestContext},
+    tool, tool_handler, tool_router,
 };
-use serde::{Deserialize, Serialize};
-use tracing::{debug, warn};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use tracing::warn;
 
-use crate::backend::{Backend, BackendError, ChatMessage, ChatRequest};
+use crate::{
+    backend::{Backend, BackendError, BoxFuture, ChatMessage, ChatRequest},
+    chunk, schema,
+    summarise::{self, NoProgress, Progress, SummariseError, SummaryLength},
+};
 
-const INSTRUCTIONS: &str = "Runs a small on-device model (for Apple Foundation Models) for free, private, offline text work: \
-summarising logs, documents and notes. Not for code, maths, reasoning or facts; the model has a small context (~8K tokens) \
-and can be wrong, so check anything important.";
+const INSTRUCTIONS: &str = "Runs a small on-device model (for Apple Foundation Models) for free, \
+private, offline text work: summarising, extracting fields, classifying, and reading text in \
+images. Not for code, maths, reasoning or facts; the model has a small context (~8K tokens per \
+call) and can be wrong, so check anything important.";
 
-const SUMMARISE_DESCRIPTION: &str = "Summarise text with the on-device model for Apple Foundation Models. \
-Free, private and offline. Good for condensing logs, documents, notes and transcripts. \
-Limits: small model with an ~8K-token context shared by input and summary, so send at most ~4,000 words; \
-longer input returns an error. Not for code, maths, reasoning or facts. \
-Summaries can miss or distort details; check anything important.";
+const SUMMARISE_DESCRIPTION: &str = "Summarise text with the on-device model for Apple \
+Foundation Models. Free, private and offline. Good for condensing logs, documents, notes and \
+transcripts. Long input (up to about 30,000 words of prose, far less for dense logs) is split \
+into parts and combined, which is slower and loses some detail. Not for code, maths, reasoning \
+or facts. Summaries can miss or distort details; check anything important.";
+
+const EXTRACT_DESCRIPTION: &str = "Extract fields from text into JSON matching a JSON Schema, \
+with the on-device model for Apple Foundation Models (free, private, offline). Good for names, \
+dates, amounts and IDs in short documents, emails or logs. Input up to about 5,000 words. Fields \
+the text lacks come back as null. Flat schemas work best; nested objects are unreliable. Allowed \
+keywords: type, properties, required, items, enum, const, description, minItems, maxItems. Not \
+for code or reasoning. Values can be wrong; check what matters.";
+
+const CLASSIFY_DESCRIPTION: &str = "Pick the best label for a text from a list you give, with \
+the on-device model for Apple Foundation Models (free, private, offline). Good for triage: \
+sorting tickets, emails, comments or log lines into categories. The answer is always one of \
+your labels (or several, with `multi`). Input up to about 5,000 words; 2 to 50 labels. Subtle \
+or ambiguous text can be mislabelled, so spot-check. Not for code, maths or reasoning.";
+
+const OCR_DESCRIPTION: &str = "Read the text in an image file (screenshot, scanned page, \
+receipt, handwriting) with the on-device model for Apple Foundation Models (free, private, \
+offline). Give an absolute path to a PNG, JPEG, HEIC, TIFF, GIF or BMP file; PDFs are not \
+supported. Returns the text line by line, or answers `prompt` about the image instead. Small \
+or unusual text can be misread; check numbers that matter. Not for code review or reasoning.";
+
+/// Structured calls normally take 1–2 s; a runaway would take minutes.
+const STRUCTURED_TIMEOUT: Duration = Duration::from_secs(30);
+/// Tokens set aside for instructions in `extract` and `classify` calls.
+const STRUCTURED_INSTRUCTION_TOKENS: usize = 200;
+const EXTRACT_OUTPUT_TOKENS: u32 = 1000;
+const CLASSIFY_OUTPUT_TOKENS: u32 = 200;
+const MAX_LABELS: usize = 50;
+const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+const OCR_PROMPT: &str =
+    "Return all the text in this image exactly as written, line by line. Do not add anything.";
 
 // Tool schemas stay portable: one `type` per field (no `["string", "null"]`)
 // and no `$ref`, because some clients reject either. A test enforces this.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SummariseParams {
-    /// The text to summarise: plain text, Markdown or logs. Keep it under about 4,000 words.
+    /// The text to summarise: plain text, Markdown or logs.
     pub text: String,
     /// Optional focus, for example "errors only" or "decisions and owners". Leave empty for a general summary.
     #[serde(default)]
@@ -38,34 +80,39 @@ pub struct SummariseParams {
     pub length: SummaryLength,
 }
 
-#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "lowercase")]
-#[schemars(inline)]
-pub enum SummaryLength {
-    Short,
-    #[default]
-    Medium,
-    Bullets,
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExtractParams {
+    /// The text to extract from. Up to about 5,000 words.
+    pub text: String,
+    /// A JSON Schema for the result. The top level must be an object, for example
+    /// {"type": "object", "properties": {"invoice": {"type": "string"}, "total": {"type": "number"}}}.
+    pub schema: serde_json::Map<String, Value>,
+    /// Optional extra guidance, for example "amounts in AUD without the currency sign".
+    #[serde(default)]
+    pub instructions: String,
 }
 
-impl SummaryLength {
-    fn instruction(self) -> &'static str {
-        match self {
-            Self::Short => "Write one or two sentences.",
-            Self::Medium => "Write one paragraph of three to five sentences.",
-            Self::Bullets => {
-                "Write three to seven short bullet points, one per line, each starting with \"- \"."
-            }
-        }
-    }
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ClassifyParams {
+    /// The text to classify. Up to about 5,000 words.
+    pub text: String,
+    /// The labels to choose from: 2 to 50 distinct, non-empty strings.
+    pub labels: Vec<String>,
+    /// Allow several labels instead of exactly one. Defaults to false.
+    #[serde(default)]
+    pub multi: bool,
+    /// Optional guidance, for example what each label means.
+    #[serde(default)]
+    pub instructions: String,
+}
 
-    fn max_tokens(self) -> u32 {
-        match self {
-            Self::Short => 120,
-            Self::Medium => 300,
-            Self::Bullets => 350,
-        }
-    }
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OcrParams {
+    /// Absolute path to a PNG, JPEG, HEIC, TIFF, GIF or BMP image.
+    pub path: String,
+    /// Optional question or instruction about the image. Leave empty to get all the text.
+    #[serde(default)]
+    pub prompt: String,
 }
 
 #[derive(Clone)]
@@ -85,47 +132,225 @@ impl FmMcp {
 
     #[tool(
         description = SUMMARISE_DESCRIPTION,
-        annotations(
-            title = "Summarise text (on-device)",
-            read_only_hint = true,
-            destructive_hint = false,
-            open_world_hint = false
-        )
+        annotations(title = "Summarise text (on-device)", read_only_hint = true, destructive_hint = false, open_world_hint = false)
     )]
     async fn summarise(
         &self,
         Parameters(params): Parameters<SummariseParams>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         if params.text.trim().is_empty() {
             return Ok(tool_error(
                 "`text` is empty; there is nothing to summarise.",
             ));
         }
-        let request = summarise_request(&params);
-        Ok(match self.backend.chat(request).await {
-            Ok(response) => {
-                if let Some(usage) = response.usage {
-                    debug!(
-                        "summarise used {} prompt + {} completion tokens",
-                        usage.prompt_tokens, usage.completion_tokens
-                    );
+        let progress: Box<dyn Progress> = match context.meta.get_progress_token() {
+            Some(token) => Box::new(PeerProgress {
+                peer: context.peer.clone(),
+                token,
+            }),
+            None => Box::new(NoProgress),
+        };
+        let result = summarise::summarise(
+            self.backend.as_ref(),
+            &params.text,
+            &params.focus,
+            params.length,
+            progress.as_ref(),
+        )
+        .await;
+        Ok(match result {
+            Ok(summary) => {
+                let mut text = match params.length {
+                    SummaryLength::Bullets => normalise_bullets(&summary.text),
+                    SummaryLength::Short | SummaryLength::Medium => summary.text,
+                };
+                if summary.parts > 1 {
+                    text.push_str(&format!(
+                        "\n\n(Long input: summarised in {} parts, then combined.)",
+                        summary.parts
+                    ));
                 }
-                match response.text().map(str::trim) {
-                    Some(summary) if !summary.is_empty() => {
-                        let summary = match params.length {
-                            SummaryLength::Bullets => normalise_bullets(summary),
-                            SummaryLength::Short | SummaryLength::Medium => summary.to_owned(),
-                        };
-                        CallToolResult::success(vec![ContentBlock::text(summary)])
-                    }
-                    _ => tool_error("The on-device model returned an empty summary."),
-                }
+                CallToolResult::success(vec![ContentBlock::text(text)])
             }
-            Err(e) => {
+            Err(SummariseError::TooLong(tokens)) => tool_error(&too_long_for_summarise(tokens)),
+            Err(SummariseError::Backend(e)) => {
                 warn!("summarise failed: {e}");
                 tool_error(&backend_error_text(&e))
             }
         })
+    }
+
+    #[tool(
+        description = EXTRACT_DESCRIPTION,
+        annotations(title = "Extract fields as JSON (on-device)", read_only_hint = true, destructive_hint = false, open_world_hint = false)
+    )]
+    async fn extract(
+        &self,
+        Parameters(params): Parameters<ExtractParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if params.text.trim().is_empty() {
+            return Ok(tool_error(
+                "`text` is empty; there is nothing to extract from.",
+            ));
+        }
+        let schema = match schema::prepare(&Value::Object(params.schema)) {
+            Ok(schema) => schema,
+            Err(problem) => return Ok(tool_error(&format!("Unusable schema: {problem}."))),
+        };
+        if let Err(message) = self.check_fits(&params.text, EXTRACT_OUTPUT_TOKENS).await {
+            return Ok(tool_error(&message));
+        }
+        let mut system = String::from(
+            "Extract the requested fields from the text. Copy values exactly as written. \
+             Use null for anything the text does not state; never guess.",
+        );
+        push_guidance(&mut system, &params.instructions);
+        let request = ChatRequest::new(vec![
+            ChatMessage::system(system),
+            ChatMessage::user(params.text),
+        ])
+        .with_json_schema("Extraction", schema.clone())
+        .with_max_tokens(EXTRACT_OUTPUT_TOKENS)
+        .with_timeout(STRUCTURED_TIMEOUT);
+        Ok(self.structured_call(request, &schema, "extract").await)
+    }
+
+    #[tool(
+        description = CLASSIFY_DESCRIPTION,
+        annotations(title = "Classify text (on-device)", read_only_hint = true, destructive_hint = false, open_world_hint = false)
+    )]
+    async fn classify(
+        &self,
+        Parameters(params): Parameters<ClassifyParams>,
+    ) -> Result<CallToolResult, McpError> {
+        if params.text.trim().is_empty() {
+            return Ok(tool_error("`text` is empty; there is nothing to classify."));
+        }
+        if let Err(problem) = check_labels(&params.labels) {
+            return Ok(tool_error(&problem));
+        }
+        if let Err(message) = self.check_fits(&params.text, CLASSIFY_OUTPUT_TOKENS).await {
+            return Ok(tool_error(&message));
+        }
+        let labels = json!(params.labels);
+        let schema = if params.multi {
+            json!({"type": "object", "properties": {"labels": {
+                "type": "array", "items": {"type": "string", "enum": labels},
+                "maxItems": params.labels.len()}}, "required": ["labels"]})
+        } else {
+            json!({"type": "object", "properties": {"label": {"type": "string", "enum": labels}},
+                   "required": ["label"]})
+        };
+        let mut system = if params.multi {
+            String::from("Choose every label that applies to the text. Use only the given labels.")
+        } else {
+            String::from(
+                "Choose the single label that best fits the text. Use only the given labels.",
+            )
+        };
+        push_guidance(&mut system, &params.instructions);
+        let request = ChatRequest::new(vec![
+            ChatMessage::system(system),
+            ChatMessage::user(params.text),
+        ])
+        .with_json_schema("Classification", schema.clone())
+        .with_max_tokens(CLASSIFY_OUTPUT_TOKENS)
+        .with_timeout(STRUCTURED_TIMEOUT);
+        Ok(self.structured_call(request, &schema, "classify").await)
+    }
+
+    #[tool(
+        description = OCR_DESCRIPTION,
+        annotations(title = "Read text in an image (on-device)", read_only_hint = true, destructive_hint = false, open_world_hint = false)
+    )]
+    async fn ocr(
+        &self,
+        Parameters(params): Parameters<OcrParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let data_url = match read_image(Path::new(&params.path)).await {
+            Ok(url) => url,
+            Err(problem) => return Ok(tool_error(&problem)),
+        };
+        let prompt = if params.prompt.trim().is_empty() {
+            OCR_PROMPT.to_owned()
+        } else {
+            params.prompt
+        };
+        let request = ChatRequest::new(vec![ChatMessage::user_with_image(prompt, data_url)]);
+        Ok(match self.backend.chat(request).await {
+            Ok(response) => match response.text().map(str::trim) {
+                Some(text) if !text.is_empty() => {
+                    CallToolResult::success(vec![ContentBlock::text(text)])
+                }
+                _ => tool_error("The on-device model found no text in the image."),
+            },
+            Err(e) => {
+                warn!("ocr failed: {e}");
+                tool_error(&backend_error_text(&e))
+            }
+        })
+    }
+}
+
+impl FmMcp {
+    /// Refuses input too long for one call (D2: only `summarise` splits input).
+    async fn check_fits(&self, text: &str, output_tokens: u32) -> Result<(), String> {
+        let budget = chunk::input_budget(STRUCTURED_INSTRUCTION_TOKENS, output_tokens as usize);
+        let too_long = |tokens: String| {
+            format!(
+                "Input is too long for the on-device model ({tokens}; the limit for this tool is \
+                 about {budget} tokens). Send only the part that matters."
+            )
+        };
+        if text.chars().count() > budget * chunk::MAX_CHARS_PER_TOKEN {
+            return Err(too_long("far over the limit".into()));
+        }
+        match self.backend.count_tokens(text).await {
+            Ok(tokens) if tokens > budget => Err(too_long(format!("{tokens} tokens"))),
+            Ok(_) => Ok(()),
+            Err(e) => Err(backend_error_text(&e)),
+        }
+    }
+
+    /// Sends a structured-output request and checks the answer against `schema`.
+    async fn structured_call(
+        &self,
+        request: ChatRequest,
+        schema: &Value,
+        tool: &str,
+    ) -> CallToolResult {
+        let response = match self.backend.chat(request).await {
+            Ok(response) => response,
+            Err(BackendError::Timeout(_)) => {
+                warn!("{tool}: structured output ran away; fm serve replaced");
+                return tool_error(
+                    "The on-device model got stuck and was stopped. This happens when the schema \
+                     is nested or asks for many fields the text doesn't contain. Try a flat \
+                     schema with fewer fields, or do this task yourself.",
+                );
+            }
+            Err(e) => {
+                warn!("{tool} failed: {e}");
+                return tool_error(&backend_error_text(&e));
+            }
+        };
+        let text = response.text().unwrap_or_default();
+        let value: Value = match serde_json::from_str(text) {
+            Ok(value) => value,
+            Err(_) => {
+                return tool_error(
+                    "The on-device model returned invalid JSON. Try again, or do this task yourself.",
+                );
+            }
+        };
+        match schema::validate(&value, schema) {
+            Ok(()) => CallToolResult::structured(value),
+            Err(problem) => tool_error(&format!(
+                "The on-device model's answer didn't match the schema ({problem}). Try again with \
+                 a simpler schema, or do this task yourself."
+            )),
+        }
     }
 }
 
@@ -141,22 +366,104 @@ impl ServerHandler for FmMcp {
     }
 }
 
-fn summarise_request(params: &SummariseParams) -> ChatRequest {
-    let mut system = String::from(
-        "You summarise text accurately. Use only information in the text. \
-         Do not add facts, opinions or advice. ",
-    );
-    system.push_str(params.length.instruction());
-    let focus = params.focus.trim();
-    if !focus.is_empty() {
-        system.push_str(&format!(
-            " Focus on: {focus}. Leave out anything unrelated."
+/// Sends MCP progress notifications for a long `summarise`.
+struct PeerProgress {
+    peer: Peer<RoleServer>,
+    token: ProgressToken,
+}
+
+impl Progress for PeerProgress {
+    fn report(&self, done: usize, total: usize, message: String) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let param = ProgressNotificationParam::new(self.token.clone(), done as f64)
+                .with_total(total as f64)
+                .with_message(message);
+            if let Err(e) = self.peer.notify_progress(param).await {
+                warn!("could not send progress: {e}");
+            }
+        })
+    }
+}
+
+fn check_labels(labels: &[String]) -> Result<(), String> {
+    if !(2..=MAX_LABELS).contains(&labels.len()) {
+        return Err(format!(
+            "Give between 2 and {MAX_LABELS} labels (got {}).",
+            labels.len()
         ));
     }
-    let user = format!("Summarise this text:\n\n{}", params.text);
+    if labels.iter().any(|l| l.trim().is_empty()) {
+        return Err("Labels must not be empty.".into());
+    }
+    let mut seen = std::collections::HashSet::new();
+    if let Some(duplicate) = labels.iter().find(|l| !seen.insert(l.as_str())) {
+        return Err(format!(
+            "Labels must be distinct; `{duplicate}` appears twice."
+        ));
+    }
+    Ok(())
+}
 
-    ChatRequest::new(vec![ChatMessage::system(system), ChatMessage::user(user)])
-        .with_max_tokens(params.length.max_tokens())
+/// Reads an image file into a data URL, after checking it's a supported type.
+async fn read_image(path: &Path) -> Result<String, String> {
+    if !path.is_absolute() {
+        return Err(format!(
+            "`path` must be absolute (got `{}`).",
+            path.display()
+        ));
+    }
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let mime = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "heic" => "image/heic",
+        "tif" | "tiff" => "image/tiff",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "pdf" => return Err("PDFs are not supported. Convert the page to PNG first (for example with `sips -s format png`).".into()),
+        _ => return Err(format!("Unsupported file type `.{extension}`. Use PNG, JPEG, HEIC, TIFF, GIF or BMP.")),
+    };
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| format!("Cannot read `{}`: {e}.", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("`{}` is not a file.", path.display()));
+    }
+    if metadata.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "`{}` is larger than 20 MB; scale it down first.",
+            path.display()
+        ));
+    }
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("Cannot read `{}`: {e}.", path.display()))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{mime};base64,{encoded}"))
+}
+
+fn push_guidance(system: &mut String, guidance: &str) {
+    let guidance = guidance.trim();
+    if !guidance.is_empty() {
+        system.push_str(&format!(" Extra guidance: {guidance}"));
+    }
+}
+
+fn too_long_for_summarise(tokens: Option<usize>) -> String {
+    let size = tokens.map_or_else(
+        || "far over the limit".to_owned(),
+        |t| format!("{t} tokens"),
+    );
+    format!(
+        "Input is too long to summarise ({size}; the limit is {} tokens, about 30,000 words of \
+         prose or much less for dense logs). Send less, for example the most recent or most \
+         relevant section.",
+        chunk::MAX_INPUT_TOKENS
+    )
 }
 
 /// One "- " bullet per non-empty line. The model sometimes doubles the marker ("- - ").
@@ -209,6 +516,10 @@ fn backend_error_text(error: &BackendError) -> String {
             "The on-device model server keeps crashing ({crashes} times in the last minute), so \
              fm-mcp has stopped restarting it for now. Run `fm-mcp doctor`. Do this task yourself."
         ),
+        BackendError::CountFailed(detail) => format!(
+            "fm-mcp could not measure the input's size with `fm count-tokens` ({detail}). \
+             Run `fm-mcp doctor`. Do this task yourself for now."
+        ),
         BackendError::Timeout(secs) => format!(
             "The on-device model took longer than {secs} s. Other sessions may be using it; \
              try a shorter input."
@@ -223,29 +534,47 @@ fn backend_error_text(error: &BackendError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::ChatResponse;
 
-    fn params(length: SummaryLength, focus: Option<&str>) -> SummariseParams {
-        SummariseParams {
-            text: "Some text.".into(),
-            focus: focus.unwrap_or_default().into(),
-            length,
+    const DESCRIPTIONS: [(&str, &str); 4] = [
+        ("summarise", SUMMARISE_DESCRIPTION),
+        ("extract", EXTRACT_DESCRIPTION),
+        ("classify", CLASSIFY_DESCRIPTION),
+        ("ocr", OCR_DESCRIPTION),
+    ];
+
+    struct NoBackend;
+
+    impl Backend for NoBackend {
+        fn chat(&self, _request: ChatRequest) -> BoxFuture<'_, Result<ChatResponse, BackendError>> {
+            Box::pin(async { Err(BackendError::Connection("test".into())) })
+        }
+
+        fn count_tokens<'a>(
+            &'a self,
+            _text: &'a str,
+        ) -> BoxFuture<'a, Result<usize, BackendError>> {
+            Box::pin(async { Ok(1) })
         }
     }
 
-    fn tool_schemas() -> Vec<serde_json::Value> {
-        let backend: Arc<dyn Backend> = Arc::new(NoBackend);
-        FmMcp::new(backend)
+    fn server() -> FmMcp {
+        FmMcp::new(Arc::new(NoBackend))
+    }
+
+    fn tool_schemas() -> Vec<Value> {
+        server()
             .tool_router
             .list_all()
             .into_iter()
-            .map(|tool| serde_json::Value::Object((*tool.input_schema).clone()))
+            .map(|tool| Value::Object((*tool.input_schema).clone()))
             .collect()
     }
 
-    /// Collects every `type` value and `$ref` key found anywhere in a schema.
-    fn walk(value: &serde_json::Value, types: &mut Vec<serde_json::Value>, refs: &mut usize) {
+    /// Collects every `type` value and counts `$ref` keys anywhere in a schema.
+    fn walk(value: &Value, types: &mut Vec<Value>, refs: &mut usize) {
         match value {
-            serde_json::Value::Object(map) => {
+            Value::Object(map) => {
                 for (key, child) in map {
                     match key.as_str() {
                         "type" => types.push(child.clone()),
@@ -255,12 +584,34 @@ mod tests {
                     walk(child, types, refs);
                 }
             }
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    walk(item, types, refs);
-                }
-            }
+            Value::Array(items) => items.iter().for_each(|item| walk(item, types, refs)),
             _ => {}
+        }
+    }
+
+    #[test]
+    fn server_should_list_all_four_tools() {
+        let mut names: Vec<String> = server()
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["classify", "extract", "ocr", "summarise"]);
+    }
+
+    #[test]
+    fn every_description_should_state_it_is_not_for_code() {
+        for (name, description) in DESCRIPTIONS {
+            assert!(description.contains("Not for code"), "{name}");
+        }
+    }
+
+    #[test]
+    fn every_description_should_stay_under_600_chars() {
+        for (name, description) in DESCRIPTIONS {
+            assert!(description.len() < 600, "{name}: {}", description.len());
         }
     }
 
@@ -269,7 +620,7 @@ mod tests {
         for schema in tool_schemas() {
             let (mut types, mut refs) = (Vec::new(), 0);
             walk(&schema, &mut types, &mut refs);
-            assert!(types.iter().all(serde_json::Value::is_string), "{schema}");
+            assert!(types.iter().all(Value::is_string), "{schema}");
         }
     }
 
@@ -284,53 +635,28 @@ mod tests {
 
     #[test]
     fn length_schema_should_be_an_inline_enum_with_default() {
-        let schema = &tool_schemas()[0];
-        let length = &schema["properties"]["length"];
+        let summarise = tool_schemas()
+            .into_iter()
+            .find(|s| s["properties"].get("length").is_some())
+            .unwrap();
+        let length = &summarise["properties"]["length"];
         assert_eq!(
             (&length["enum"], &length["default"]),
-            (
-                &serde_json::json!(["short", "medium", "bullets"]),
-                &serde_json::json!("medium")
-            )
+            (&json!(["short", "medium", "bullets"]), &json!("medium"))
         );
     }
 
     #[test]
-    fn summarise_description_should_state_limits() {
-        assert!(SUMMARISE_DESCRIPTION.contains("Not for code"));
-    }
-
-    #[test]
-    fn summarise_description_should_stay_under_600_chars() {
-        assert!(SUMMARISE_DESCRIPTION.len() < 600);
-    }
-
-    #[test]
-    fn summarise_request_should_include_focus_in_system_prompt() {
-        let request = summarise_request(&params(SummaryLength::Medium, Some("errors only")));
-        assert!(
-            request.messages[0]
-                .content
-                .contains("Focus on: errors only.")
-        );
-    }
-
-    #[test]
-    fn summarise_request_should_ignore_blank_focus() {
-        let request = summarise_request(&params(SummaryLength::Medium, Some("  ")));
-        assert!(!request.messages[0].content.contains("Focus on"));
-    }
-
-    #[test]
-    fn summarise_request_should_cap_tokens_by_length() {
-        let request = summarise_request(&params(SummaryLength::Short, None));
-        assert_eq!(request.max_tokens, Some(120));
+    fn server_info_should_name_fm_mcp() {
+        assert_eq!(server().get_info().server_info.name, "fm-mcp");
     }
 
     #[test]
     fn normalise_bullets_should_collapse_doubled_markers() {
-        let input = "- - first\n\n- second\n* third";
-        assert_eq!(normalise_bullets(input), "- first\n- second\n- third");
+        assert_eq!(
+            normalise_bullets("- - first\n\n- second\n* third"),
+            "- first\n- second\n- third"
+        );
     }
 
     #[test]
@@ -339,27 +665,41 @@ mod tests {
     }
 
     #[test]
-    fn server_info_should_name_fm_mcp() {
-        let backend: Arc<dyn Backend> = Arc::new(NoBackend);
-        let info = FmMcp::new(backend).get_info();
-        assert_eq!(info.server_info.name, "fm-mcp");
-    }
-
-    struct NoBackend;
-
-    impl Backend for NoBackend {
-        fn chat(
-            &self,
-            _request: ChatRequest,
-        ) -> crate::backend::BoxFuture<'_, Result<crate::backend::ChatResponse, BackendError>>
-        {
-            Box::pin(async { Err(BackendError::Connection("test".into())) })
-        }
+    fn check_labels_should_reject_too_few() {
+        assert!(check_labels(&["only".into()]).is_err());
     }
 
     #[test]
-    fn length_should_default_to_medium_when_omitted() {
-        let params: SummariseParams = serde_json::from_str(r#"{"text":"x"}"#).unwrap();
-        assert!(matches!(params.length, SummaryLength::Medium));
+    fn check_labels_should_reject_duplicates() {
+        assert_eq!(
+            check_labels(&["bug".into(), "bug".into()]).unwrap_err(),
+            "Labels must be distinct; `bug` appears twice."
+        );
+    }
+
+    #[test]
+    fn read_image_should_reject_relative_paths() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert!(
+            runtime
+                .block_on(read_image(Path::new("shot.png")))
+                .unwrap_err()
+                .contains("absolute")
+        );
+    }
+
+    #[test]
+    fn read_image_should_reject_pdfs_with_advice() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert!(
+            runtime
+                .block_on(read_image(Path::new("/tmp/page.pdf")))
+                .unwrap_err()
+                .starts_with("PDFs are not supported")
+        );
     }
 }
