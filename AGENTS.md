@@ -6,7 +6,7 @@ Guidance for coding agents (Claude Code, Codex) working in this repository.
 
 **fm-mcp** — an MCP server that lets coding agents hand cheap, private, simple work to Apple's on-device Foundation Model (the `fm` that ships with macOS 27). Free, offline, one-command install.
 
-**Status:** v1 is being built in phases; see `plans/active/FM_MCP_V1.md`. Phase 1 (stdio server with `summarise` over `fm serve`) is on branch `phase-1-scaffold`.
+**Status:** v1 is being built in phases. Current state: `plans/STATUS.md` and `plans/active/FM_MCP_V1.md`.
 
 ## The goal
 
@@ -63,6 +63,14 @@ Probed on macOS 27, 2026-10-06; re-checked on macOS 27.0.1 (26A434), 2026-10-06.
 - **Licence gate:** `fm` has a Legal Notice that must be agreed once (`fm license`). `fm license --status` reports it. `fm available` prints *"System model available"* and exits 0 when the model is ready *(2026-10-06)*.
 - `fm` has no `--version` flag.
 - Endpoints: `GET /health`, `GET /v1/models` (model id `system`), `POST /v1/chat/completions`.
+
+## Development
+
+- **Run tests with `cargo test --features fake-fm`.** The feature builds `fake-fm` (`tests/fake_fm/fake_fm.rs`), a fake `fm serve` the integration tests use, so they need no Apple Intelligence. Plain `cargo test` fails on purpose with that instruction.
+- **Lint:** `cargo clippy --all-targets --all-features -- -D warnings` and `cargo fmt --check`. CI (`.github/workflows/ci.yml`) runs all three on macOS arm64.
+- **The fake is driven by** environment variables (`FAKE_FM_AVAILABLE`, `FAKE_FM_START_DELAY_MS`, `FAKE_FM_LOG`) and magic words in the prompt (`FAKE_OVERFLOW`, `FAKE_GUARDRAIL`, `FAKE_BAD_REQUEST`, `FAKE_HANG`, `FAKE_CRASH`, `FAKE_CRASH_ONCE`). When `fm` shows new behaviour, record it in the verified facts above and teach the fake.
+- **Settings:** `FM_MCP_FM_PATH` (default `/usr/bin/fm`), `FM_MCP_REQUEST_TIMEOUT_SECS` (default 120), `FM_MCP_LOG` (log filter, default `info,rmcp=warn`). Logs go to stderr only; stdout is the MCP protocol.
+- **Tool schemas must be portable:** one `type` per field and no `$ref`. A unit test enforces this for every tool.
 
 ## Distribution
 

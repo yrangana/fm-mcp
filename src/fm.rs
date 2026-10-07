@@ -1,10 +1,11 @@
 //! The `fm serve` backend: runs `fm serve` as a child process on a Unix socket
 //! and sends Chat Completions requests to it.
 //!
-//! Phase 1 keeps this minimal: lazy start, health check, one request at a time,
-//! clean shutdown. Restart limits and the fake server for tests come in Phase 2.
+//! The child starts lazily on the first request, is health-checked, and is
+//! replaced if it dies, stops answering, or times out. Requests run one at a time.
 
 use std::{
+    collections::VecDeque,
     fs::Permissions,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -42,20 +43,41 @@ const MAX_SOCKET_PATH: usize = 100;
 const SOCKET_NAME: &str = "fm.sock";
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const HEALTH_POLL: Duration = Duration::from_millis(100);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const STOP_GRACE: Duration = Duration::from_secs(2);
+/// Give up restarting after this many crashes within `CRASH_WINDOW`.
+const MAX_CRASHES: usize = 3;
+const CRASH_WINDOW: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub struct FmConfig {
     pub fm_path: PathBuf,
+    pub request_timeout: Duration,
 }
 
 impl FmConfig {
-    /// Reads `FM_MCP_FM_PATH` (used by tests to point at a fake), else `/usr/bin/fm`.
+    /// Reads the environment:
+    /// - `FM_MCP_FM_PATH`: the `fm` binary (tests point it at a fake); default `/usr/bin/fm`.
+    /// - `FM_MCP_REQUEST_TIMEOUT_SECS`: per-request timeout; default 120.
     pub fn from_env() -> Self {
         let fm_path = std::env::var_os("FM_MCP_FM_PATH")
             .map_or_else(|| PathBuf::from(DEFAULT_FM_PATH), PathBuf::from);
-        Self { fm_path }
+        let request_timeout = parse_timeout(std::env::var("FM_MCP_REQUEST_TIMEOUT_SECS").ok());
+        Self {
+            fm_path,
+            request_timeout,
+        }
+    }
+}
+
+fn parse_timeout(value: Option<String>) -> Duration {
+    match value.as_deref().map(str::parse::<u64>) {
+        Some(Ok(secs)) if secs > 0 => Duration::from_secs(secs),
+        Some(_) => {
+            warn!("ignoring invalid FM_MCP_REQUEST_TIMEOUT_SECS; using the default");
+            DEFAULT_REQUEST_TIMEOUT
+        }
+        None => DEFAULT_REQUEST_TIMEOUT,
     }
 }
 
@@ -63,7 +85,33 @@ impl FmConfig {
 /// the model handles one request at a time anyway (AGENTS.md verified facts).
 pub struct FmServe {
     config: FmConfig,
-    state: Mutex<Option<Running>>,
+    state: Mutex<State>,
+}
+
+#[derive(Default)]
+struct State {
+    running: Option<Running>,
+    /// When recent children crashed (died or stopped answering), for the restart limit.
+    crashes: VecDeque<Instant>,
+}
+
+impl State {
+    /// Drops the current child (killing it) and records a crash.
+    fn discard_crashed(&mut self) {
+        self.running = None;
+        self.crashes.push_back(Instant::now());
+    }
+
+    fn recent_crashes(&mut self) -> usize {
+        while self
+            .crashes
+            .front()
+            .is_some_and(|t| t.elapsed() > CRASH_WINDOW)
+        {
+            self.crashes.pop_front();
+        }
+        self.crashes.len()
+    }
 }
 
 /// Fields drop in order: the child is killed first, then the private socket
@@ -78,7 +126,7 @@ impl FmServe {
     pub fn new(config: FmConfig) -> Self {
         Self {
             config,
-            state: Mutex::new(None),
+            state: Mutex::new(State::default()),
         }
     }
 
@@ -89,41 +137,76 @@ impl FmServe {
             warn!("request still in flight at shutdown; killing fm serve");
             return;
         };
-        if let Some(running) = state.take() {
+        if let Some(running) = state.running.take() {
             running.stop().await;
         }
     }
 
+    /// Sends one request. If the child has died or the connection fails, the
+    /// child is replaced and the request retried once. Model calls have no side
+    /// effects, so a retry is safe.
     async fn chat_inner(&self, request: ChatRequest) -> Result<ChatResponse, BackendError> {
-        let mut state = self.state.lock().await;
-
-        let needs_start = match state.as_mut() {
-            None => true,
-            Some(running) => running.has_exited(),
-        };
-        if needs_start {
-            if state.is_some() {
-                warn!("fm serve exited; restarting");
-            }
-            *state = Some(self.start().await?);
-        }
-        let Some(running) = state.as_ref() else {
-            return Err(BackendError::Connection("fm serve is not running".into()));
-        };
-
         let body = serde_json::to_vec(&request)
             .map_err(|e| BackendError::BadResponse(format!("could not encode request: {e}")))?;
-        let (status, bytes) = timeout(
-            REQUEST_TIMEOUT,
-            http(&running.socket, Method::POST, "/v1/chat/completions", body),
-        )
-        .await
-        .map_err(|_| BackendError::Timeout(REQUEST_TIMEOUT.as_secs()))??;
+        let mut state = self.state.lock().await;
 
-        if !status.is_success() {
-            return Err(BackendError::from_http(status.as_u16(), &bytes));
+        for attempt in 1..=2 {
+            let socket = self.ensure_running(&mut state).await?;
+            let sent = timeout(
+                self.config.request_timeout,
+                http(&socket, Method::POST, "/v1/chat/completions", body.clone()),
+            )
+            .await;
+
+            let (status, bytes) = match sent {
+                Ok(Ok(response)) => response,
+                Ok(Err(BackendError::Connection(e))) => {
+                    warn!("fm serve connection failed (attempt {attempt}): {e}");
+                    state.discard_crashed();
+                    if attempt == 1 {
+                        continue;
+                    }
+                    return Err(BackendError::Connection(e));
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_) => {
+                    // fm serve would keep working on the hung request and queue ours
+                    // behind it, so replace it. A timeout is not counted as a crash.
+                    warn!("fm serve timed out; replacing it");
+                    state.running = None;
+                    return Err(BackendError::Timeout(self.config.request_timeout.as_secs()));
+                }
+            };
+
+            if !status.is_success() {
+                return Err(BackendError::from_http(status.as_u16(), &bytes));
+            }
+            return serde_json::from_slice(&bytes)
+                .map_err(|e| BackendError::BadResponse(e.to_string()));
         }
-        serde_json::from_slice(&bytes).map_err(|e| BackendError::BadResponse(e.to_string()))
+        Err(BackendError::Connection("fm serve is not running".into()))
+    }
+
+    /// Returns the socket of a healthy child, starting or replacing it if needed.
+    async fn ensure_running(&self, state: &mut State) -> Result<PathBuf, BackendError> {
+        if state.running.as_mut().is_some_and(Running::has_exited) {
+            warn!("fm serve exited unexpectedly");
+            state.discard_crashed();
+        }
+        if let Some(running) = &state.running {
+            return Ok(running.socket.clone());
+        }
+        let crashes = state.recent_crashes();
+        if crashes >= MAX_CRASHES {
+            return Err(BackendError::CrashLoop(crashes));
+        }
+        if crashes > 0 {
+            info!("restarting fm serve");
+        }
+        let running = self.start().await?;
+        let socket = running.socket.clone();
+        state.running = Some(running);
+        Ok(socket)
     }
 
     async fn start(&self) -> Result<Running, BackendError> {
@@ -143,8 +226,8 @@ impl FmServe {
             .process_group(0)
             .spawn()
             .map_err(|e| {
-                BackendError::Unavailable(format!(
-                    "could not start `{} serve`: {e}",
+                BackendError::StartFailed(format!(
+                    "could not run `{} serve`: {e}",
                     self.config.fm_path.display()
                 ))
             })?;
@@ -188,7 +271,7 @@ impl Running {
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         loop {
             if let Ok(Some(status)) = self.child.try_wait() {
-                return Err(BackendError::Unavailable(format!(
+                return Err(BackendError::StartFailed(format!(
                     "fm serve exited ({status}) before it was ready"
                 )));
             }
@@ -198,16 +281,14 @@ impl Running {
                         .map_err(|e| BackendError::BadResponse(format!("/health: {e}")))?;
                     return match health.models.iter().find(|m| m.name == "system") {
                         Some(model) if model.available => Ok(()),
-                        _ => Err(BackendError::Unavailable(
-                            "fm serve reports the system model is not available".into(),
-                        )),
+                        _ => Err(BackendError::ModelUnavailable),
                     };
                 }
                 Ok((status, _)) => debug!("fm serve /health returned {status}"),
                 Err(e) => debug!("fm serve not ready yet: {e}"),
             }
             if Instant::now() >= deadline {
-                return Err(BackendError::Unavailable(format!(
+                return Err(BackendError::StartFailed(format!(
                     "fm serve did not become ready within {} s",
                     STARTUP_TIMEOUT.as_secs()
                 )));
@@ -254,7 +335,7 @@ fn private_socket_dir(tmpdir: Option<&Path>) -> Result<(TempDir, PathBuf), Backe
         }
         last_error = format!("socket path under {} is too long", base.display());
     }
-    Err(BackendError::Unavailable(last_error))
+    Err(BackendError::StartFailed(last_error))
 }
 
 /// One HTTP/1.1 request over a fresh Unix socket connection.

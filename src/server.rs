@@ -193,12 +193,21 @@ fn backend_error_text(error: &BackendError) -> String {
             "fm-mcp sent a request the model server rejected (HTTP {status}: {message}). \
              This is a bug in fm-mcp; please report it."
         ),
-        BackendError::Unavailable(detail) => format!(
-            "The on-device model is not available: {detail}. Apple Intelligence may be off or still \
-             downloading. Run `fm-mcp doctor` for details."
+        BackendError::ModelUnavailable => "Apple Intelligence is not available on this Mac \
+             (it may be turned off or still downloading). Run `fm-mcp doctor` for details. \
+             Do this task yourself for now."
+            .into(),
+        BackendError::StartFailed(detail) => format!(
+            "The on-device model server could not start: {detail}. Run `fm-mcp doctor` for details. \
+             Do this task yourself for now."
         ),
-        BackendError::Connection(detail) => format!(
-            "The on-device model server stopped responding ({detail}). Run `fm-mcp doctor`."
+        // The detail (e.g. "connection refused") is logged, not shown: it doesn't help the agent.
+        BackendError::Connection(_) => "The on-device model server stopped responding. \
+             Run `fm-mcp doctor`. Do this task yourself for now."
+            .into(),
+        BackendError::CrashLoop(crashes) => format!(
+            "The on-device model server keeps crashing ({crashes} times in the last minute), so \
+             fm-mcp has stopped restarting it for now. Run `fm-mcp doctor`. Do this task yourself."
         ),
         BackendError::Timeout(secs) => format!(
             "The on-device model took longer than {secs} s. Other sessions may be using it; \
