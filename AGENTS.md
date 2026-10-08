@@ -24,7 +24,7 @@ Other Apple FM MCP servers exist, all Python and clone-to-install. What sets thi
 ## v1 scope
 
 - **Tools:** `summarise`, `extract` (JSON schema), `classify`, `ocr`. No general `ask` tool in v1 (decided 2026-10-06: it invites over-delegation).
-- **Commands:** `fm-mcp` (stdio server), `fm-mcp install [--claude] [--codex]`, `fm-mcp doctor`.
+- **Commands:** `fm-mcp` (stdio server), `fm-mcp install [--claude] [--codex] [--dry-run] [--uninstall] [--no-guidance]`, `fm-mcp doctor`.
 - **Requirements:** Apple Silicon, macOS 27, Apple Intelligence enabled.
 
 ## Architecture
