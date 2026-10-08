@@ -7,6 +7,8 @@ description: Use when a task involves summarising logs, documents or transcripts
 
 fm-mcp runs a small model on this Mac: free and private, but limited. Give it bulk, low-stakes text work you can check.
 
+**For a file, pass `path`; don't read it yourself.** The saving is in never loading the text; once you've read it, doing the task yourself is cheaper.
+
 ## Use fm-mcp for
 
 | Task | Tool |
@@ -21,19 +23,19 @@ fm-mcp runs a small model on this Mac: free and private, but limited. Give it bu
 - It involves code, config, diffs, maths, or judging causes, designs or correctness.
 - A wrong answer would be costly or unsafe: legal, medical, financial, security, or anything published unchecked.
 - A script does it exactly: grep, jq, a YAML parser, counting line prefixes.
-- It's one short item; answering directly costs about the same.
+- It's one short item.
 
 Splitting a task is fine: `ocr` reads a stack-trace screenshot; you fix the bug.
 
 ## Size and speed
 
-- `summarise` takes up to about 30,000 words of prose, but only about 1,000 lines of a dense log. For a bigger log, filter it first (errors, or a time window). Long input is split and combined, which can take a minute or two and drop details; to find specific events, grep instead.
+- `summarise` takes up to about 30,000 words of prose, but only about 1,000 lines of a dense log. Filter bigger logs first (errors, a time window). Long input is split and combined: slower, and it can drop details. To find specific events, grep instead.
 - `extract` and `classify` take about 3,500 words of prose per call, far less of a log. Send only the relevant section.
-- Calls run one at a time on the shared model. Don't send many in parallel.
+- Calls queue on the shared model; don't send many in parallel.
 
 ## Check the results
 
-The model can drop or distort details, mislabel, or put a nearby wrong value in a field. Spot-check what matters against the source.
+The model can drop or distort details, mislabel, or put a nearby wrong value in a field. Spot-check what matters.
 
 ## When a tool returns an error
 
