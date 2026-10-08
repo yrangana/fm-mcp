@@ -39,7 +39,7 @@ Summaries can miss or distort details; check anything important.";
 const EXTRACT_DESCRIPTION: &str = "Extract fields from text into JSON matching a JSON Schema, \
 with the on-device model for Apple Foundation Models (free, private, offline). Good for names, \
 dates, amounts and IDs in short documents, emails or logs. Input up to about 3,500 words. Fields \
-the text lacks come back as null. Flat schemas work best; nested objects are unreliable. Allowed \
+the text lacks usually come back as null. Flat schemas work best; nested objects are unreliable. Allowed \
 keywords: type, properties, required, items, enum, const, description, minItems, maxItems. Not \
 for code or reasoning. Values can be wrong; check what matters.";
 
@@ -205,7 +205,9 @@ impl FmMcp {
         }
         let mut system = String::from(
             "Extract the requested fields from the text. Copy values exactly as written. \
-             Use null for anything the text does not state; never guess.",
+             Use null for anything the text does not state; never guess. Most of the text \
+             belongs to no field: leave it out. A field gets a value only when the text \
+             states that exact thing; otherwise it is null.",
         );
         push_guidance(&mut system, &params.instructions);
         let request = ChatRequest::new(vec![
@@ -215,7 +217,10 @@ impl FmMcp {
         .with_json_schema("Extraction", schema.clone())
         .with_max_tokens(EXTRACT_OUTPUT_TOKENS)
         .with_timeout(STRUCTURED_TIMEOUT);
-        Ok(self.structured_call(request, &schema, "extract").await)
+        Ok(self
+            .structured_call(request, &schema, "extract")
+            .await
+            .map_or_else(|error| error, CallToolResult::structured))
     }
 
     #[tool(
@@ -259,7 +264,19 @@ impl FmMcp {
         .with_json_schema("Classification", schema.clone())
         .with_max_tokens(CLASSIFY_OUTPUT_TOKENS)
         .with_timeout(STRUCTURED_TIMEOUT);
-        Ok(self.structured_call(request, &schema, "classify").await)
+        Ok(
+            match self.structured_call(request, &schema, "classify").await {
+                // The model can repeat a label in a `multi` answer (seen 2026-10-08).
+                Ok(mut value) => {
+                    if let Some(chosen) = value.get_mut("labels").and_then(Value::as_array_mut) {
+                        let mut seen = std::collections::HashSet::new();
+                        chosen.retain(|label| seen.insert(label.clone()));
+                    }
+                    CallToolResult::structured(value)
+                }
+                Err(error) => error,
+            },
+        )
     }
 
     #[tool(
@@ -316,44 +333,44 @@ impl FmMcp {
     }
 
     /// Sends a structured-output request and checks the answer against `schema`.
+    /// The error is the tool result to return as it is.
     async fn structured_call(
         &self,
         request: ChatRequest,
         schema: &Value,
         tool: &str,
-    ) -> CallToolResult {
+    ) -> Result<Value, CallToolResult> {
         let response = match self.backend.chat(request).await {
             Ok(response) => response,
             Err(BackendError::Timeout(secs)) => {
                 warn!("{tool}: structured output ran away; fm serve replaced");
-                return tool_error(&format!(
+                return Err(tool_error(&format!(
                     "The on-device model got stuck and was stopped after {secs} s. Either the \
                      schema made it run away (nested, or many fields the text doesn't contain), \
                      or another session is using the model. Try once more with a flatter schema \
                      and fewer fields; if that fails too, do this task yourself."
-                ));
+                )));
             }
             Err(e) => {
                 warn!("{tool} failed: {e}");
-                return tool_error(&backend_error_text(&e));
+                return Err(tool_error(&backend_error_text(&e)));
             }
         };
         let text = response.text().unwrap_or_default();
         let value: Value = match serde_json::from_str(text) {
             Ok(value) => value,
             Err(_) => {
-                return tool_error(
+                return Err(tool_error(
                     "The on-device model returned invalid JSON. Try again, or do this task yourself.",
-                );
+                ));
             }
         };
-        match schema::validate(&value, schema) {
-            Ok(()) => CallToolResult::structured(value),
-            Err(problem) => tool_error(&format!(
+        schema::validate(&value, schema).map(|()| value).map_err(|problem| {
+            tool_error(&format!(
                 "The on-device model's answer didn't match the schema ({problem}). Try again with \
                  a simpler schema, or do this task yourself."
-            )),
-        }
+            ))
+        })
     }
 }
 

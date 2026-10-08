@@ -419,7 +419,8 @@ fn extract_should_send_a_nullable_schema_with_unique_titles() {
         .unwrap();
     assert_eq!(
         request["response_format"]["json_schema"]["schema"]["properties"]["total"],
-        json!({"title": "Total", "anyOf": [{"type": "number"}, {"type": "null"}]})
+        json!({"title": "Total", "description": "total. Null unless the text states it.",
+               "anyOf": [{"type": "number"}, {"type": "null"}]})
     );
 }
 
@@ -493,6 +494,16 @@ fn classify_multi_should_return_a_list_of_labels() {
     let result = server.call_tool(
         "classify",
         json!({"text": "Crash and a feature idea", "labels": ["bug", "feature"], "multi": true}),
+    );
+    assert_eq!(result.structured, Some(json!({"labels": ["bug"]})));
+}
+
+#[test]
+fn classify_multi_should_drop_repeated_labels() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "classify",
+        json!({"text": "FAKE_REPEAT", "labels": ["bug", "feature"], "multi": true}),
     );
     assert_eq!(result.structured, Some(json!({"labels": ["bug"]})));
 }

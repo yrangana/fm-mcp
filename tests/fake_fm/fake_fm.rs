@@ -11,7 +11,9 @@
 //! Per-request behaviour comes from a magic word in the last message:
 //! `FAKE_OVERFLOW`, `FAKE_GUARDRAIL`, `FAKE_BAD_REQUEST` (error responses),
 //! `FAKE_HANG` (never answer), `FAKE_CRASH` (exit mid-request), and
-//! `FAKE_CRASH_ONCE` (exit mid-request only the first time; needs `FAKE_FM_LOG`).
+//! `FAKE_CRASH_ONCE` (exit mid-request only the first time; needs `FAKE_FM_LOG`),
+//! and `FAKE_REPEAT` (every array in a structured answer lists its items twice,
+//! as the real model sometimes repeats `multi` labels).
 //! Like the real server, it streams unless the request has `"stream": false`.
 //! Structured-output requests get a value that fits the schema (`null` for
 //! nullable fields), and a message with an image gets `Fake text read from
@@ -152,6 +154,8 @@ async fn chat(body: &[u8]) -> Response<Full<Bytes>> {
         "Fake text read from an image.".to_owned()
     } else if schema.is_null() {
         format!("Fake summary of {} characters.", last.chars().count())
+    } else if last.contains("FAKE_REPEAT") {
+        repeat_arrays(fake_instance(schema)).to_string()
     } else {
         fake_instance(schema).to_string()
     };
@@ -217,6 +221,22 @@ fn fake_instance(schema: &Value) -> Value {
         Some("number") => json!(1.5),
         Some("boolean") => json!(false),
         _ => Value::Null,
+    }
+}
+
+fn repeat_arrays(value: Value) -> Value {
+    match value {
+        Value::Array(items) => {
+            let items: Vec<Value> = items.into_iter().map(repeat_arrays).collect();
+            Value::Array(items.iter().chain(&items).cloned().collect())
+        }
+        Value::Object(object) => Value::Object(
+            object
+                .into_iter()
+                .map(|(k, v)| (k, repeat_arrays(v)))
+                .collect(),
+        ),
+        other => other,
     }
 }
 
