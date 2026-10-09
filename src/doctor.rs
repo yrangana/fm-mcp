@@ -235,8 +235,10 @@ fn model_available(fm_path: &Path) -> Check {
             } else {
                 text
             },
-            "turn on Apple Intelligence in System Settings › Apple Intelligence & Siri, and \
-             wait for the model to finish downloading",
+            // No pane name: on macOS 27.0.1 the Siri pane has no Apple
+            // Intelligence switch (checked 2026-10-09).
+            "turn on Apple Intelligence for this Mac in System Settings, and wait for the \
+             model to finish downloading",
         )
     }
 }

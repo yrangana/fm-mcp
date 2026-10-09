@@ -46,7 +46,7 @@ The same five tool prompts as in section 3, in a new Codex session.
 
 - [ ] Kill `fm serve` mid-session (`pkill -9 -f 'fm serve --socket'`, which hits every session's `fm serve`). The next tool call works.
 - [ ] Quit the agent. `pgrep -fl 'fm serve --socket'` shows no `fm-mcp-*` socket from that session, and `ls $TMPDIR | grep fm-mcp-` is empty once all sessions are closed.
-- [ ] Turn Apple Intelligence off in System Settings. Record exactly what `fm available` prints, what `doctor` shows, and the tool error an agent gets. Turn it back on.
+- [ ] Turn Apple Intelligence off in System Settings, if this macOS has a switch for it (macOS 27.0.1 has none: its Siri pane only turns Siri off, and `fm available` still says the model is available). Record exactly what `fm available` prints, what `doctor` shows, and the tool error an agent gets. Turn it back on.
 - [ ] Licence not agreed, if it can be reset: record what `fm license --status`, `doctor` and a tool call show.
 
 ## 6. Uninstall
