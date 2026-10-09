@@ -219,9 +219,11 @@ fn run_claude(claude: &Path, args: &[&str]) -> Result<()> {
 }
 
 /// Writes the delegation skill.
-pub fn install_skill(paths: &Paths, dry_run: bool) -> Result<(Change, Entry)> {
+/// `ours` is the fingerprint of the skill fm-mcp last wrote, from the manifest:
+/// an unedited earlier version is replaced without a backup.
+pub fn install_skill(paths: &Paths, ours: Option<&str>, dry_run: bool) -> Result<(Change, Entry)> {
     let path = paths.skill_file();
-    let written = files::write(&path, SKILL, dry_run)
+    let written = files::write_unless_ours(&path, SKILL, ours, dry_run)
         .with_context(|| format!("cannot write {}", path.display()))?;
     let change = Change {
         path: path.clone(),
@@ -234,6 +236,7 @@ pub fn install_skill(paths: &Paths, dry_run: bool) -> Result<(Change, Entry)> {
         path,
         created_file: written.action == Action::Created,
         created_dirs: written.created_dirs,
+        written: files::fingerprint(SKILL),
         ..Entry::default()
     };
     Ok((change, entry))
@@ -244,8 +247,9 @@ pub fn uninstall_skill(entry: &Entry, dry_run: bool) -> Result<Option<Change>> {
     if !entry.path.exists() {
         return Ok(None);
     }
-    // Back up only if someone has edited it since.
-    let edited = files::read(&entry.path)?.as_deref() != Some(SKILL);
+    // Back up only if someone has edited it since fm-mcp wrote it.
+    let edited = files::read(&entry.path)?
+        .is_some_and(|text| text != SKILL && files::fingerprint(&text) != entry.written);
     let backup = files::remove(&entry.path, !edited, dry_run)?;
     let mut dirs = entry.created_dirs.clone();
     // The skill's own folder is fm-mcp's even if the manifest is missing.

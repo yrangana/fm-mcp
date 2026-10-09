@@ -263,6 +263,59 @@ fn install_should_back_up_each_existing_file_once() {
     assert_eq!(home.backups(), 3);
 }
 
+const SKILL: &str = include_str!("../skills/fm-delegate/SKILL.md");
+const SKILL_FILE: &str = ".claude/skills/fm-delegate/SKILL.md";
+const MANIFEST: &str = "Library/Application Support/fm-mcp/install.json";
+
+/// Puts an "older fm-mcp" skill in place, recorded in the manifest as fm-mcp's own.
+fn install_an_older_skill(home: &Home, text: &str) {
+    home.write(SKILL_FILE, text);
+    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&home.read(MANIFEST).unwrap()).unwrap();
+    for entry in manifest["entries"].as_array_mut().unwrap() {
+        if entry["kind"] == "claude_skill" {
+            entry["written"] = format!("fnv1a64:{hash:016x}").into();
+        }
+    }
+    home.write(MANIFEST, &manifest.to_string());
+}
+
+#[test]
+fn install_should_replace_its_own_older_skill_without_a_backup() {
+    let home = configured_home();
+    home.run(&["install", "--claude"]);
+    install_an_older_skill(&home, "fm-mcp's skill, an older version\n");
+    let backups = home.backups();
+    home.run(&["install", "--claude"]);
+    assert_eq!(
+        (home.read(SKILL_FILE).as_deref(), home.backups()),
+        (Some(SKILL), backups)
+    );
+}
+
+#[test]
+fn install_should_back_up_a_skill_someone_edited() {
+    let home = configured_home();
+    home.run(&["install", "--claude"]);
+    home.write(SKILL_FILE, "my own edits\n");
+    let backups = home.backups();
+    home.run(&["install", "--claude"]);
+    assert_eq!(home.backups(), backups + 1);
+}
+
+#[test]
+fn uninstall_should_not_back_up_its_own_older_skill() {
+    let home = configured_home();
+    home.run(&["install", "--claude"]);
+    install_an_older_skill(&home, "fm-mcp's skill, an older version\n");
+    home.run(&["install", "--uninstall", "--claude"]);
+    // A backup would keep the skill's folder from being removed.
+    assert!(!home.path(".claude/skills/fm-delegate").exists());
+}
+
 #[test]
 fn uninstall_should_restore_every_file_exactly() {
     let home = configured_home();

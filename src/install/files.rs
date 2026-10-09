@@ -65,6 +65,23 @@ pub fn read(path: &Path) -> io::Result<Option<String>> {
 /// file is backed up first and keeps its permissions. With `dry_run`, only
 /// reports what would happen.
 pub fn write(path: &Path, content: &str, dry_run: bool) -> io::Result<Written> {
+    write_unless_ours(path, content, None, dry_run)
+}
+
+/// Writes a file that only fm-mcp uses (the manifest), with no backup.
+pub fn write_own(path: &Path, content: &str) -> io::Result<Written> {
+    let ours = read(path)?.map(|old| fingerprint(&old));
+    write_unless_ours(path, content, ours.as_deref(), false)
+}
+
+/// Like `write`, but skips the backup when the file still has the fingerprint
+/// `ours`: fm-mcp wrote it and nobody has edited it since.
+pub fn write_unless_ours(
+    path: &Path,
+    content: &str,
+    ours: Option<&str>,
+    dry_run: bool,
+) -> io::Result<Written> {
     let old = read(path)?;
     if old.as_deref() == Some(content) {
         return Ok(Written {
@@ -85,10 +102,12 @@ pub fn write(path: &Path, content: &str, dry_run: bool) -> io::Result<Written> {
             created_dirs: Vec::new(),
         });
     }
-    let backup = if old.is_some() {
-        Some(backup(path)?)
-    } else {
-        None
+    let unedited = old
+        .as_deref()
+        .is_some_and(|old| ours == Some(fingerprint(old).as_str()));
+    let backup = match old {
+        Some(_) if !unedited => Some(backup(path)?),
+        _ => None,
     };
     let parent = path.parent().unwrap_or(Path::new("/"));
     let created_dirs = create_dirs(parent)?;
@@ -132,6 +151,15 @@ pub fn remove_empty_dirs(dirs: &[PathBuf], dry_run: bool) {
 }
 
 /// Copies `path` to `<path>.fm-mcp-backup-<UTC time>`.
+/// A stable fingerprint of `text` (64-bit FNV-1a), recorded in the manifest so a
+/// later run can tell fm-mcp's own unedited file from one a person changed.
+pub fn fingerprint(text: &str) -> String {
+    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("fnv1a64:{hash:016x}")
+}
+
 pub fn backup(path: &Path) -> io::Result<PathBuf> {
     let stamp = timestamp();
     let mut name = path.as_os_str().to_owned();
@@ -238,6 +266,18 @@ pub fn remove_block(content: &str, separator: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fingerprint_should_be_fnv1a_64() {
+        // Published FNV-1a test vectors.
+        assert_eq!(
+            (fingerprint(""), fingerprint("a")),
+            (
+                "fnv1a64:cbf29ce484222325".into(),
+                "fnv1a64:af63dc4c8601ec8c".into()
+            )
+        );
+    }
 
     const BLOCK: &str = "<!-- fm-mcp:begin x -->\nrules\n<!-- fm-mcp:end -->\n";
 
