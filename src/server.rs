@@ -232,7 +232,7 @@ impl FmMcp {
         Ok(self
             .structured_call(request, &schema, "extract")
             .await
-            .map_or_else(|error| error, CallToolResult::structured))
+            .map_or_else(|error| tool_error(&error), CallToolResult::structured))
     }
 
     #[tool(
@@ -284,7 +284,7 @@ impl FmMcp {
                     }
                     CallToolResult::structured(value)
                 }
-                Err(error) => error,
+                Err(error) => tool_error(&error),
             },
         )
     }
@@ -349,7 +349,7 @@ impl FmMcp {
         request: ChatRequest,
         schema: &Value,
         tool: &str,
-    ) -> Result<Value, CallToolResult> {
+    ) -> Result<Value, String> {
         let cap = request.max_completion_tokens;
         let response = match self.backend.chat(request).await {
             // `fm` closes the JSON when the cap cuts an answer off, so a capped
@@ -360,42 +360,44 @@ impl FmMcp {
                 }) =>
             {
                 warn!("{tool}: structured output ran on to the length cap");
-                return Err(tool_error(
+                return Err(
                     "The on-device model got stuck: its answer ran on to the length limit, so \
                      fm-mcp discarded it. Usually the schema has fields the text doesn't contain, \
                      or asks for more than about 1,000 tokens of JSON. Try once more with a \
-                     flatter schema and fewer fields; if that fails too, do this task yourself.",
-                ));
+                     flatter schema and fewer fields; if that fails too, do this task yourself."
+                        .into(),
+                );
             }
             Ok(response) => response,
             Err(BackendError::Timeout(secs)) => {
                 warn!("{tool}: structured output ran away; fm serve replaced");
-                return Err(tool_error(&format!(
+                return Err(format!(
                     "The on-device model got stuck and was stopped after {secs} s. Either the \
                      schema made it run away (nested, or many fields the text doesn't contain), \
                      or another session is using the model. Try once more with a flatter schema \
                      and fewer fields; if that fails too, do this task yourself."
-                )));
+                ));
             }
             Err(e) => {
                 warn!("{tool} failed: {e}");
-                return Err(tool_error(&backend_error_text(&e)));
+                return Err(backend_error_text(&e));
             }
         };
         let text = response.text().unwrap_or_default();
         let value: Value = match serde_json::from_str(text) {
             Ok(value) => value,
             Err(_) => {
-                return Err(tool_error(
-                    "The on-device model returned invalid JSON. Try again, or do this task yourself.",
-                ));
+                return Err(
+                    "The on-device model returned invalid JSON. Try again, or do this task yourself."
+                        .into(),
+                );
             }
         };
         schema::validate(&value, schema).map(|()| value).map_err(|problem| {
-            tool_error(&format!(
+            format!(
                 "The on-device model's answer didn't match the schema ({problem}). Try again with \
                  a simpler schema, or do this task yourself."
-            ))
+            )
         })
     }
 }
