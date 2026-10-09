@@ -31,11 +31,11 @@ call) and can be wrong, so check anything important.";
 
 const SUMMARISE_DESCRIPTION: &str = "Summarise text with the on-device model for Apple \
 Foundation Models. Free, private and offline. Good for condensing logs, documents, notes and \
-transcripts. Limit: about 30,000 words of prose but only about 1,000 lines of a dense log; \
-filter bigger logs first (for example, grep the errors). Pass `path` to a text file instead of \
-`text` so you don't have to read the file first. Long input is split into parts and \
-combined, which is slower and can drop details. Not for code, maths, reasoning or facts. \
-Summaries can miss or distort details; check anything important.";
+transcripts into a gist (a paragraph, or at most 7 bullets), not a full record. Limit: about \
+30,000 words of prose but only about 1,000 lines of a dense log; filter bigger logs first (grep \
+the errors). Pass `path` to a text file instead of `text` to avoid reading it yourself. Long \
+input is split and combined: slower, and it can drop details. Not for code, maths, reasoning or \
+facts. Summaries can miss or distort details; check anything important.";
 
 const EXTRACT_DESCRIPTION: &str = "Extract fields from text into JSON matching a JSON Schema, \
 with the on-device model for Apple Foundation Models (free, private, offline). Good for names, \

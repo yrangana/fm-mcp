@@ -364,6 +364,10 @@ def tools():
                  "use the JSON API instead. Two-factor login is now required for admins.")
         err, text, _, secs = server.call("summarise", {"text": notes, "length": "short"})
         check(not err and len(text) > 20, f"summarise ({secs:.1f} s)", text.replace("\n", " ")[:160])
+        notes_file = SCRATCH / "notes.txt"
+        notes_file.write_text(notes)
+        err, text, _, secs = server.call("summarise", {"path": str(notes_file), "length": "short"})
+        check(not err and len(text) > 20, f"summarise from `path` ({secs:.1f} s)", text.replace("\n", " ")[:100])
 
         err, text, data, secs = server.call("extract", {"text": SHIPPING, "schema": SHIPPING_SCHEMA})
         data = data or {}

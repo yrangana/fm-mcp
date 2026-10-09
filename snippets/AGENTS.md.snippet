@@ -3,7 +3,7 @@
 
 The fm-mcp tools run a small model on this Mac: free and private, but limited. Use them for bulk, low-stakes text work you can check. For a file, pass `path` and don't read the file yourself: the saving comes from never loading the text; once you've read it, doing the task yourself is cheaper.
 
-- `summarise`: condense logs, documents, transcripts or commit messages. Up to about 30,000 words of prose, but only about 1,000 lines of a dense log; filter bigger logs first (errors, a time window). Long input can take a minute or two and drop details; to find specific events, grep instead.
+- `summarise`: condense logs, documents, transcripts or commit messages into a gist (a paragraph, or at most 7 bullets), not a full record; to cover every release, item or event, read or grep it yourself. Up to about 30,000 words of prose, but only about 1,000 lines of a dense log; filter bigger logs first (errors, a time window). Long input can take a minute or two and drop details; to find specific events, grep instead.
 - `extract`: pull named fields from one text as JSON (flat schema).
 - `classify`: sort a text into labels you choose (one text per call).
 - `extract` and `classify` take about 3,500 words of prose per call, far less of a log. Send only the relevant section.
