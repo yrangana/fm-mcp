@@ -581,6 +581,23 @@ fn extract_runaway_should_become_a_stuck_error() {
 }
 
 #[test]
+fn extract_answer_at_the_length_cap_should_become_a_stuck_error() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "extract",
+        json!({"text": "FAKE_RUN_ON", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}),
+    );
+    assert!(
+        result.is_error
+            && result
+                .text
+                .starts_with("The on-device model got stuck: its answer ran on"),
+        "{}",
+        result.text
+    );
+}
+
+#[test]
 fn classify_should_return_one_of_the_labels() {
     let mut server = Server::start(&[]);
     let result = server.call_tool(
@@ -625,7 +642,7 @@ fn classify_multi_should_ask_for_at_least_one_label_and_room_to_answer() {
         .unwrap();
     let labels = &request["response_format"]["json_schema"]["schema"]["properties"]["labels"];
     assert_eq!(
-        (&labels["minItems"], &request["max_tokens"]),
+        (&labels["minItems"], &request["max_completion_tokens"]),
         (&json!(1), &json!(500))
     );
 }

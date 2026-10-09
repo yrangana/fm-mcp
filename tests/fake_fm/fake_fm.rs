@@ -12,8 +12,9 @@
 //! `FAKE_OVERFLOW`, `FAKE_GUARDRAIL`, `FAKE_BAD_REQUEST` (error responses),
 //! `FAKE_HANG` (never answer), `FAKE_CRASH` (exit mid-request), and
 //! `FAKE_CRASH_ONCE` (exit mid-request only the first time; needs `FAKE_FM_LOG`),
-//! and `FAKE_REPEAT` (every array in a structured answer lists its items twice,
-//! as the real model sometimes repeats `multi` labels).
+//! `FAKE_REPEAT` (every array in a structured answer lists its items twice,
+//! as the real model sometimes repeats `multi` labels), and `FAKE_RUN_ON` (the
+//! answer reports using its whole `max_completion_tokens`, as a runaway does).
 //! Like the real server, it streams unless the request has `"stream": false`.
 //! Structured-output requests get a value that fits the schema (`null` for
 //! nullable fields), and a message with an image gets `Fake text read from
@@ -169,6 +170,11 @@ async fn chat(body: &[u8]) -> Response<Full<Bytes>> {
             .body(Full::new(Bytes::from(sse)))
             .unwrap();
     }
+    let completion_tokens = if last.contains("FAKE_RUN_ON") {
+        request["max_completion_tokens"].as_u64().unwrap_or(8)
+    } else {
+        8
+    };
     reply(
         StatusCode::OK,
         &json!({
@@ -176,7 +182,7 @@ async fn chat(body: &[u8]) -> Response<Full<Bytes>> {
             "model": "system",
             "choices": [{"index": 0, "finish_reason": "stop",
                          "message": {"role": "assistant", "content": content, "refusal": null}}],
-            "usage": {"prompt_tokens": 60, "completion_tokens": 8, "total_tokens": 68}
+            "usage": {"prompt_tokens": 60, "completion_tokens": completion_tokens, "total_tokens": 60 + completion_tokens}
         }),
     )
 }

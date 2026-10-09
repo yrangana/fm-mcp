@@ -350,7 +350,23 @@ impl FmMcp {
         schema: &Value,
         tool: &str,
     ) -> Result<Value, CallToolResult> {
+        let cap = request.max_completion_tokens;
         let response = match self.backend.chat(request).await {
+            // `fm` closes the JSON when the cap cuts an answer off, so a capped
+            // answer looks valid but ends in junk: the runaway case.
+            Ok(response)
+                if cap.is_some_and(|cap| {
+                    response.usage.is_some_and(|u| u.completion_tokens >= cap)
+                }) =>
+            {
+                warn!("{tool}: structured output ran on to the length cap");
+                return Err(tool_error(
+                    "The on-device model got stuck: its answer ran on to the length limit, so \
+                     fm-mcp discarded it. Usually the schema has fields the text doesn't contain, \
+                     or asks for more than about 1,000 tokens of JSON. Try once more with a \
+                     flatter schema and fewer fields; if that fails too, do this task yourself.",
+                ));
+            }
             Ok(response) => response,
             Err(BackendError::Timeout(secs)) => {
                 warn!("{tool}: structured output ran away; fm serve replaced");

@@ -287,6 +287,15 @@ def facts():
         check(status == 200 and '"logprobs"' not in body.replace('"logprobs":null', ""),
               "no log probabilities", f"{status}")
 
+        essay = [{"role": "user", "content": "Write a detailed 600-word essay about the history of bridges."}]
+        used = {}
+        for field in ("max_tokens", "max_completion_tokens"):
+            status, _, body = http(serve.sock, "POST", "/v1/chat/completions",
+                                   {**ask, "stream": False, "messages": essay, field: 30})
+            used[field] = json.loads(body)["usage"]["completion_tokens"] if status == 200 else status
+        check(used["max_completion_tokens"] == 30 and used["max_tokens"] > 30,
+              "max_completion_tokens caps the answer; max_tokens is ignored", f"answer tokens with a cap of 30: {used}")
+
         words = 5800  # about 9.3K tokens of prose: over the 8K context
         text = prose(words)
         tokens = count_tokens(text)
