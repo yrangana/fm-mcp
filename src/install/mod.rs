@@ -106,6 +106,9 @@ pub struct Entry {
     /// Folders fm-mcp created, outermost first.
     #[serde(default)]
     pub created_dirs: Vec<PathBuf>,
+    /// Fingerprint of the file as fm-mcp last wrote it (the skill only).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub written: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,15 +139,20 @@ impl Manifest {
     }
 
     /// Keeps the first record for each file: it describes the state before
-    /// fm-mcp first touched it.
+    /// fm-mcp first touched it. Only the fingerprint of what fm-mcp last wrote
+    /// is updated.
     fn add(&mut self, entry: Entry) {
-        if !self
-            .entries
-            .iter()
-            .any(|e| e.kind == entry.kind && e.path == entry.path)
-        {
-            self.entries.push(entry);
+        match self.find(entry.kind, &entry.path) {
+            Some(existing) if !entry.written.is_empty() => existing.written = entry.written,
+            Some(_) => {}
+            None => self.entries.push(entry),
         }
+    }
+
+    fn find(&mut self, kind: Kind, path: &Path) -> Option<&mut Entry> {
+        self.entries
+            .iter_mut()
+            .find(|e| e.kind == kind && e.path == path)
     }
 }
 
@@ -198,7 +206,10 @@ pub fn run(options: Options) -> Result<()> {
         section.changes.push(change);
         entry.into_iter().for_each(|e| manifest.add(e));
         if !options.no_guidance {
-            let (change, entry) = claude::install_skill(&paths, options.dry_run)?;
+            let ours = manifest
+                .find(Kind::ClaudeSkill, &paths.skill_file())
+                .map(|e| e.written.clone());
+            let (change, entry) = claude::install_skill(&paths, ours.as_deref(), options.dry_run)?;
             section.changes.push(change);
             manifest.add(entry);
         }
@@ -264,7 +275,7 @@ pub fn run(options: Options) -> Result<()> {
     manifest.version = 1;
     manifest.binary = binary_text;
     let text = serde_json::to_string_pretty(&manifest)? + "\n";
-    let written = files::write(&paths.manifest, &text, false)
+    let written = files::write_own(&paths.manifest, &text)
         .with_context(|| format!("cannot write {}", paths.manifest.display()))?;
     if written.action != Action::Unchanged {
         println!("\nRecord of changes: {}", paths.manifest.display());
@@ -383,7 +394,7 @@ fn uninstall(paths: &Paths, claude: bool, codex: bool, options: Options) -> Resu
         Some(mut manifest) if !kept.is_empty() => {
             manifest.entries = kept;
             let text = serde_json::to_string_pretty(&manifest)? + "\n";
-            files::write(&paths.manifest, &text, false)?;
+            files::write_own(&paths.manifest, &text)?;
         }
         Some(_) => {
             std::fs::remove_file(&paths.manifest)?;

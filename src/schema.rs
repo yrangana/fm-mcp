@@ -150,14 +150,11 @@ fn rewrite(
         Some(scalar) if SCALARS.contains(&scalar) => {
             out.insert("type".into(), json!(scalar));
             let description = out.remove("description");
-            let mut wrapped = json!({
+            Ok(json!({
                 "title": unique_title(path, titles),
+                "description": null_description(description.as_ref(), path),
                 "anyOf": [Value::Object(out), {"type": "null"}],
-            });
-            if let Some(description) = description {
-                wrapped["description"] = description;
-            }
-            Ok(wrapped)
+            }))
         }
         // `enum` / `const` without a type: kept as they are. They can't run away,
         // and wrapping them in anyOf is untested.
@@ -190,6 +187,22 @@ fn node_type(node: &Value, path: &[String]) -> Result<(Option<String>, bool), St
         }
         _ => Err(format!("{}: `type` must be a string", show(path))),
     }
+}
+
+/// The field's description (or its name) plus a reminder that it may be null.
+/// Without it, a missing field close in meaning to other text (a PO number next
+/// to the line items) took that text in 10 of 20 runs; with it, 1 of 20
+/// (measured 2026-10-08, together with the stronger `extract` system prompt).
+fn null_description(description: Option<&Value>, path: &[String]) -> String {
+    let base = match description.and_then(Value::as_str) {
+        Some(text) if !text.trim().is_empty() => text.trim().trim_end_matches('.').to_owned(),
+        _ => path
+            .iter()
+            .rev()
+            .find(|part| *part != "item")
+            .map_or_else(String::new, |name| name.replace('_', " ")),
+    };
+    format!("{base}. Null unless the text states it.")
 }
 
 /// A title from the field's path, e.g. `CustomerPhone` or `ItemSku`. The model
@@ -329,8 +342,19 @@ mod tests {
         let prepared = prepare(&invoice_schema()).unwrap();
         assert_eq!(
             prepared["properties"]["invoice"],
-            json!({"title": "Invoice", "description": "Invoice number",
+            json!({"title": "Invoice", "description": "Invoice number. Null unless the text states it.",
                    "anyOf": [{"type": "string"}, {"type": "null"}]})
+        );
+    }
+
+    #[test]
+    fn prepare_should_describe_a_field_without_description_by_its_name() {
+        let schema =
+            json!({"type": "object", "properties": {"purchase_order": {"type": "string"}}});
+        let prepared = prepare(&schema).unwrap();
+        assert_eq!(
+            prepared["properties"]["purchase_order"]["description"],
+            json!("purchase order. Null unless the text states it.")
         );
     }
 

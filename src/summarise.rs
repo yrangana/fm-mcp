@@ -3,6 +3,7 @@
 
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 use crate::{
     backend::{Backend, BackendError, BoxFuture, ChatMessage, ChatRequest},
@@ -101,7 +102,12 @@ pub async fn summarise(
 
     let budget = chunk::input_budget(INSTRUCTION_TOKENS, length.max_tokens() as usize);
     if tokens <= budget {
-        let text = call(backend, final_request(text, focus, length, false)).await?;
+        let text = call(
+            backend,
+            "single call",
+            final_request(text, focus, length, false),
+        )
+        .await?;
         return Ok(Summary { text, parts: 1 });
     }
 
@@ -124,7 +130,14 @@ pub async fn summarise(
                     format!("Summarising part {} of {}", i + 1, pieces.len()),
                 )
                 .await;
-            summaries.push(call(backend, part_request(piece, i + 1, pieces.len(), focus)).await?);
+            summaries.push(
+                call(
+                    backend,
+                    &format!("part {} of {}", i + 1, pieces.len()),
+                    part_request(piece, i + 1, pieces.len(), focus),
+                )
+                .await?,
+            );
         }
         current = summaries
             .iter()
@@ -137,7 +150,12 @@ pub async fn summarise(
             progress
                 .report(total - 1, total, "Combining the parts".into())
                 .await;
-            let text = call(backend, final_request(&current, focus, length, true)).await?;
+            let text = call(
+                backend,
+                "combine",
+                final_request(&current, focus, length, true),
+            )
+            .await?;
             return Ok(Summary { text, parts });
         }
     }
@@ -213,13 +231,50 @@ fn push_focus(system: &mut String, focus: &str) {
     }
 }
 
-async fn call(backend: &dyn Backend, request: ChatRequest) -> Result<String, BackendError> {
-    let response = backend.chat(request).await?;
+async fn call(
+    backend: &dyn Backend,
+    step: &str,
+    request: ChatRequest,
+) -> Result<String, BackendError> {
+    let cap = request.max_completion_tokens;
+    let response = backend.chat(request).await.inspect_err(|e| {
+        debug!("summarise {step} failed: {e}");
+    })?;
+    // `fm` reports a normal finish even when the cap cut the answer off.
+    let mut cut = false;
+    if let Some(usage) = response.usage {
+        debug!(
+            "summarise {step}: {} prompt tokens, {} answer tokens",
+            usage.prompt_tokens, usage.completion_tokens
+        );
+        cut = cap.is_some_and(|cap| usage.completion_tokens >= cap);
+    }
     match response.text().map(str::trim) {
+        Some(text) if !text.is_empty() && cut => Ok(drop_unfinished_end(text).to_owned()),
         Some(text) if !text.is_empty() => Ok(text.to_owned()),
         _ => Err(BackendError::BadResponse(
             "the model returned an empty answer".into(),
         )),
+    }
+}
+
+/// Trims an answer the length cap cut off back to its last whole line (for
+/// bullets) or sentence. Keeps it all if there is nothing whole to keep.
+fn drop_unfinished_end(text: &str) -> &str {
+    if let Some((whole, _)) = text.rsplit_once('\n') {
+        return whole.trim_end();
+    }
+    let end = text
+        .char_indices()
+        .rev()
+        .find(|&(i, c)| {
+            matches!(c, '.' | '!' | '?')
+                && text[i + 1..].chars().next().is_none_or(char::is_whitespace)
+        })
+        .map(|(i, _)| i + 1);
+    match end {
+        Some(end) => &text[..end],
+        None => text,
     }
 }
 
@@ -315,5 +370,88 @@ mod tests {
             run(&backend, &text),
             Err(SummariseError::TooLong(None))
         ));
+    }
+
+    /// Answers with `reply`, reporting it used the whole length cap if `at_cap`.
+    struct Capped {
+        reply: &'static str,
+        at_cap: bool,
+    }
+
+    impl Backend for Capped {
+        fn chat(&self, request: ChatRequest) -> BoxFuture<'_, Result<ChatResponse, BackendError>> {
+            let cap = request.max_completion_tokens.unwrap();
+            let used = if self.at_cap { cap } else { cap - 1 };
+            let reply = self.reply;
+            Box::pin(async move {
+                Ok(serde_json::from_value(serde_json::json!({
+                    "choices": [{"message": {"content": reply}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": used}
+                }))
+                .unwrap())
+            })
+        }
+
+        fn count_tokens<'a>(&'a self, text: &'a str) -> BoxFuture<'a, Result<usize, BackendError>> {
+            Box::pin(async move { Ok(text.chars().count().div_ceil(4)) })
+        }
+    }
+
+    fn summarise_with(backend: &Capped) -> String {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(summarise(
+                backend,
+                "A short note.",
+                "",
+                SummaryLength::Medium,
+                &NoProgress,
+            ))
+            .ok()
+            .unwrap()
+            .text
+    }
+
+    #[test]
+    fn an_answer_cut_off_by_the_cap_should_end_at_its_last_sentence() {
+        let backend = Capped {
+            reply: "Version 3.5 adds OAuth. It also fixes the HTTP trans",
+            at_cap: true,
+        };
+        assert_eq!(summarise_with(&backend), "Version 3.5 adds OAuth.");
+    }
+
+    #[test]
+    fn an_answer_under_the_cap_should_be_kept_whole() {
+        let backend = Capped {
+            reply: "Version 3.5 adds OAuth. It also fixes the HTTP trans",
+            at_cap: false,
+        };
+        assert_eq!(
+            summarise_with(&backend),
+            "Version 3.5 adds OAuth. It also fixes the HTTP trans"
+        );
+    }
+
+    #[test]
+    fn drop_unfinished_end_should_drop_a_cut_off_bullet() {
+        assert_eq!(
+            drop_unfinished_end("- Adds OAuth.\n- Fixes the HTTP"),
+            "- Adds OAuth."
+        );
+    }
+
+    #[test]
+    fn drop_unfinished_end_should_not_cut_at_a_version_number() {
+        assert_eq!(
+            drop_unfinished_end("Covers 1.0 to 3.5.1. Adds v3.5"),
+            "Covers 1.0 to 3.5.1."
+        );
+    }
+
+    #[test]
+    fn drop_unfinished_end_should_keep_text_with_no_whole_sentence() {
+        assert_eq!(drop_unfinished_end("Adds OAuth and"), "Adds OAuth and");
     }
 }

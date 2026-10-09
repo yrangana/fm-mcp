@@ -31,22 +31,24 @@ call) and can be wrong, so check anything important.";
 
 const SUMMARISE_DESCRIPTION: &str = "Summarise text with the on-device model for Apple \
 Foundation Models. Free, private and offline. Good for condensing logs, documents, notes and \
-transcripts. Limit: about 30,000 words of prose but only about 1,000 lines of a dense log; \
-filter bigger logs first (for example, grep the errors). Long input is split into parts and \
-combined, which is slower and can drop details. Not for code, maths, reasoning or facts. \
-Summaries can miss or distort details; check anything important.";
+transcripts into a gist (a paragraph, or at most 7 bullets), not a full record. Limit: about \
+30,000 words of prose but only about 1,000 lines of a dense log; filter bigger logs first (grep \
+the errors). Pass `path` to a text file instead of `text` to avoid reading it yourself. Long \
+input is split and combined: slower, and it can drop details. Not for code, maths, reasoning or \
+facts. Summaries can miss or distort details; check anything important.";
 
 const EXTRACT_DESCRIPTION: &str = "Extract fields from text into JSON matching a JSON Schema, \
 with the on-device model for Apple Foundation Models (free, private, offline). Good for names, \
-dates, amounts and IDs in short documents, emails or logs. Input up to about 3,500 words. Fields \
-the text lacks come back as null. Flat schemas work best; nested objects are unreliable. Allowed \
+dates, amounts and IDs in short documents, emails or logs. Input up to about 3,500 words; pass \
+`path` to a text file instead of `text` so you don't have to read it first. Fields the text lacks usually come back as null. Flat schemas work best; nested objects are unreliable. Allowed \
 keywords: type, properties, required, items, enum, const, description, minItems, maxItems. Not \
 for code or reasoning. Values can be wrong; check what matters.";
 
 const CLASSIFY_DESCRIPTION: &str = "Pick the best label for a text from a list you give, with \
 the on-device model for Apple Foundation Models (free, private, offline). Good for triage: \
 sorting tickets, emails, comments or log lines into categories. The answer is always one of \
-your labels (or several, with `multi`). Input up to about 3,500 words; 2 to 50 labels. Subtle \
+your labels (or several, with `multi`). Input up to about 3,500 words, as `text` or as `path` to \
+a text file; 2 to 50 labels. Subtle \
 or ambiguous text can be mislabelled, so spot-check. Not for code, maths or reasoning.";
 
 const OCR_DESCRIPTION: &str = "Read the text in an image file (screenshot, scanned page, \
@@ -64,6 +66,9 @@ const EXTRACT_OUTPUT_TOKENS: u32 = 1000;
 const CLASSIFY_OUTPUT_TOKENS: u32 = 500;
 const MAX_LABELS: usize = 50;
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+/// Far above any tool's limit (summarise takes about 48,000 tokens, under 200 KB
+/// of prose), so a bigger file is refused before reading it.
+const MAX_TEXT_BYTES: u64 = 1024 * 1024;
 const OCR_PROMPT: &str =
     "Return all the text in this image exactly as written, line by line. Do not add anything.";
 
@@ -71,8 +76,12 @@ const OCR_PROMPT: &str =
 // and no `$ref`, because some clients reject either. A test enforces this.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SummariseParams {
-    /// The text to summarise: plain text, Markdown or logs.
+    /// The text to summarise: plain text, Markdown or logs. Give this or `path`.
+    #[serde(default)]
     pub text: String,
+    /// Absolute path to a UTF-8 text file to summarise instead of `text`.
+    #[serde(default)]
+    pub path: String,
     /// Optional focus, for example "errors only" or "decisions and owners". Leave empty for a general summary.
     #[serde(default)]
     pub focus: String,
@@ -84,8 +93,12 @@ pub struct SummariseParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ExtractParams {
-    /// The text to extract from. Up to about 3,500 words.
+    /// The text to extract from. Up to about 3,500 words. Give this or `path`.
+    #[serde(default)]
     pub text: String,
+    /// Absolute path to a UTF-8 text file to extract from instead of `text`.
+    #[serde(default)]
+    pub path: String,
     /// A JSON Schema for the result. The top level must be an object, for example
     /// {"type": "object", "properties": {"invoice": {"type": "string"}, "total": {"type": "number"}}}.
     pub schema: serde_json::Map<String, Value>,
@@ -96,8 +109,12 @@ pub struct ExtractParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ClassifyParams {
-    /// The text to classify. Up to about 3,500 words.
+    /// The text to classify. Up to about 3,500 words. Give this or `path`.
+    #[serde(default)]
     pub text: String,
+    /// Absolute path to a UTF-8 text file to classify (as one text) instead of `text`.
+    #[serde(default)]
+    pub path: String,
     /// The labels to choose from: 2 to 50 distinct, non-empty strings.
     pub labels: Vec<String>,
     /// Allow several labels instead of exactly one. Defaults to false.
@@ -141,11 +158,10 @@ impl FmMcp {
         Parameters(params): Parameters<SummariseParams>,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        if params.text.trim().is_empty() {
-            return Ok(tool_error(
-                "`text` is empty; there is nothing to summarise.",
-            ));
-        }
+        let text = match input_text(params.text, &params.path, "summarise").await {
+            Ok(text) => text,
+            Err(problem) => return Ok(tool_error(&problem)),
+        };
         let progress: Box<dyn Progress> = match context.meta.get_progress_token() {
             Some(token) => Box::new(PeerProgress {
                 peer: context.peer.clone(),
@@ -155,7 +171,7 @@ impl FmMcp {
         };
         let result = summarise::summarise(
             self.backend.as_ref(),
-            &params.text,
+            &text,
             &params.focus,
             params.length,
             progress.as_ref(),
@@ -191,31 +207,32 @@ impl FmMcp {
         &self,
         Parameters(params): Parameters<ExtractParams>,
     ) -> Result<CallToolResult, McpError> {
-        if params.text.trim().is_empty() {
-            return Ok(tool_error(
-                "`text` is empty; there is nothing to extract from.",
-            ));
-        }
+        let text = match input_text(params.text, &params.path, "extract from").await {
+            Ok(text) => text,
+            Err(problem) => return Ok(tool_error(&problem)),
+        };
         let schema = match schema::prepare(&Value::Object(params.schema)) {
             Ok(schema) => schema,
             Err(problem) => return Ok(tool_error(&format!("Unusable schema: {problem}."))),
         };
-        if let Err(message) = self.check_fits(&params.text, EXTRACT_OUTPUT_TOKENS).await {
+        if let Err(message) = self.check_fits(&text, EXTRACT_OUTPUT_TOKENS).await {
             return Ok(tool_error(&message));
         }
         let mut system = String::from(
             "Extract the requested fields from the text. Copy values exactly as written. \
-             Use null for anything the text does not state; never guess.",
+             Use null for anything the text does not state; never guess. Most of the text \
+             belongs to no field: leave it out. A field gets a value only when the text \
+             states that exact thing; otherwise it is null.",
         );
         push_guidance(&mut system, &params.instructions);
-        let request = ChatRequest::new(vec![
-            ChatMessage::system(system),
-            ChatMessage::user(params.text),
-        ])
-        .with_json_schema("Extraction", schema.clone())
-        .with_max_tokens(EXTRACT_OUTPUT_TOKENS)
-        .with_timeout(STRUCTURED_TIMEOUT);
-        Ok(self.structured_call(request, &schema, "extract").await)
+        let request = ChatRequest::new(vec![ChatMessage::system(system), ChatMessage::user(text)])
+            .with_json_schema("Extraction", schema.clone())
+            .with_max_tokens(EXTRACT_OUTPUT_TOKENS)
+            .with_timeout(STRUCTURED_TIMEOUT);
+        Ok(self
+            .structured_call(request, &schema, "extract")
+            .await
+            .map_or_else(|error| tool_error(&error), CallToolResult::structured))
     }
 
     #[tool(
@@ -226,13 +243,14 @@ impl FmMcp {
         &self,
         Parameters(params): Parameters<ClassifyParams>,
     ) -> Result<CallToolResult, McpError> {
-        if params.text.trim().is_empty() {
-            return Ok(tool_error("`text` is empty; there is nothing to classify."));
-        }
+        let text = match input_text(params.text, &params.path, "classify").await {
+            Ok(text) => text,
+            Err(problem) => return Ok(tool_error(&problem)),
+        };
         if let Err(problem) = check_labels(&params.labels) {
             return Ok(tool_error(&problem));
         }
-        if let Err(message) = self.check_fits(&params.text, CLASSIFY_OUTPUT_TOKENS).await {
+        if let Err(message) = self.check_fits(&text, CLASSIFY_OUTPUT_TOKENS).await {
             return Ok(tool_error(&message));
         }
         let labels = json!(params.labels);
@@ -252,14 +270,23 @@ impl FmMcp {
             )
         };
         push_guidance(&mut system, &params.instructions);
-        let request = ChatRequest::new(vec![
-            ChatMessage::system(system),
-            ChatMessage::user(params.text),
-        ])
-        .with_json_schema("Classification", schema.clone())
-        .with_max_tokens(CLASSIFY_OUTPUT_TOKENS)
-        .with_timeout(STRUCTURED_TIMEOUT);
-        Ok(self.structured_call(request, &schema, "classify").await)
+        let request = ChatRequest::new(vec![ChatMessage::system(system), ChatMessage::user(text)])
+            .with_json_schema("Classification", schema.clone())
+            .with_max_tokens(CLASSIFY_OUTPUT_TOKENS)
+            .with_timeout(STRUCTURED_TIMEOUT);
+        Ok(
+            match self.structured_call(request, &schema, "classify").await {
+                // The model can repeat a label in a `multi` answer (seen 2026-10-08).
+                Ok(mut value) => {
+                    if let Some(chosen) = value.get_mut("labels").and_then(Value::as_array_mut) {
+                        let mut seen = std::collections::HashSet::new();
+                        chosen.retain(|label| seen.insert(label.clone()));
+                    }
+                    CallToolResult::structured(value)
+                }
+                Err(error) => tool_error(&error),
+            },
+        )
     }
 
     #[tool(
@@ -316,17 +343,35 @@ impl FmMcp {
     }
 
     /// Sends a structured-output request and checks the answer against `schema`.
+    /// The error is the tool result to return as it is.
     async fn structured_call(
         &self,
         request: ChatRequest,
         schema: &Value,
         tool: &str,
-    ) -> CallToolResult {
+    ) -> Result<Value, String> {
+        let cap = request.max_completion_tokens;
         let response = match self.backend.chat(request).await {
+            // `fm` closes the JSON when the cap cuts an answer off, so a capped
+            // answer looks valid but ends in junk: the runaway case.
+            Ok(response)
+                if cap.is_some_and(|cap| {
+                    response.usage.is_some_and(|u| u.completion_tokens >= cap)
+                }) =>
+            {
+                warn!("{tool}: structured output ran on to the length cap");
+                return Err(
+                    "The on-device model got stuck: its answer ran on to the length limit, so \
+                     fm-mcp discarded it. Usually the schema has fields the text doesn't contain, \
+                     or asks for more than about 1,000 tokens of JSON. Try once more with a \
+                     flatter schema and fewer fields; if that fails too, do this task yourself."
+                        .into(),
+                );
+            }
             Ok(response) => response,
             Err(BackendError::Timeout(secs)) => {
                 warn!("{tool}: structured output ran away; fm serve replaced");
-                return tool_error(&format!(
+                return Err(format!(
                     "The on-device model got stuck and was stopped after {secs} s. Either the \
                      schema made it run away (nested, or many fields the text doesn't contain), \
                      or another session is using the model. Try once more with a flatter schema \
@@ -335,25 +380,25 @@ impl FmMcp {
             }
             Err(e) => {
                 warn!("{tool} failed: {e}");
-                return tool_error(&backend_error_text(&e));
+                return Err(backend_error_text(&e));
             }
         };
         let text = response.text().unwrap_or_default();
         let value: Value = match serde_json::from_str(text) {
             Ok(value) => value,
             Err(_) => {
-                return tool_error(
-                    "The on-device model returned invalid JSON. Try again, or do this task yourself.",
+                return Err(
+                    "The on-device model returned invalid JSON. Try again, or do this task yourself."
+                        .into(),
                 );
             }
         };
-        match schema::validate(&value, schema) {
-            Ok(()) => CallToolResult::structured(value),
-            Err(problem) => tool_error(&format!(
+        schema::validate(&value, schema).map(|()| value).map_err(|problem| {
+            format!(
                 "The on-device model's answer didn't match the schema ({problem}). Try again with \
                  a simpler schema, or do this task yourself."
-            )),
-        }
+            )
+        })
     }
 }
 
@@ -408,6 +453,54 @@ fn check_labels(labels: &[String]) -> Result<(), String> {
 }
 
 /// Reads an image file into a data URL, after checking it's a supported type.
+/// The tool's input: `text`, or the contents of the file at `path`. Reading the
+/// file here lets an agent delegate without loading the file into its own
+/// context first (the 2026-10-08 delegation check, plan N7).
+async fn input_text(text: String, path: &str, verb: &str) -> Result<String, String> {
+    let text = match (text.trim().is_empty(), path.trim().is_empty()) {
+        (false, false) => return Err("Give `text` or `path`, not both.".into()),
+        (true, true) => return Err(format!("`text` is empty; there is nothing to {verb}.")),
+        (false, true) => text,
+        (true, false) => read_text(Path::new(path)).await?,
+    };
+    if text.trim().is_empty() {
+        return Err(format!("`{path}` is empty; there is nothing to {verb}."));
+    }
+    Ok(text)
+}
+
+async fn read_text(path: &Path) -> Result<String, String> {
+    if !path.is_absolute() {
+        return Err(format!(
+            "`path` must be absolute (got `{}`).",
+            path.display()
+        ));
+    }
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| format!("Cannot read `{}`: {e}.", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("`{}` is not a file.", path.display()));
+    }
+    if metadata.len() > MAX_TEXT_BYTES {
+        return Err(format!(
+            "`{}` is larger than 1 MB, far too long for the on-device model. Send only the part \
+             that matters as `text` (for example, grep the errors).",
+            path.display()
+        ));
+    }
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("Cannot read `{}`: {e}.", path.display()))?;
+    match String::from_utf8(bytes) {
+        Ok(text) if !text.contains('\0') => Ok(text),
+        _ => Err(format!(
+            "`{}` is not a UTF-8 text file. For images use `ocr`; convert other formats to text first.",
+            path.display()
+        )),
+    }
+}
+
 async fn read_image(path: &Path) -> Result<String, String> {
     if !path.is_absolute() {
         return Err(format!(

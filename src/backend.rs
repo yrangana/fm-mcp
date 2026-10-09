@@ -89,8 +89,10 @@ pub struct ChatRequest {
     model: &'static str,
     stream: bool,
     pub messages: Vec<ChatMessage>,
+    /// Caps the answer's length. `fm serve` ignores the older `max_tokens`
+    /// name, even in structured output (see AGENTS.md verified facts).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
+    pub max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<Value>,
     /// Overrides the backend's default timeout for this request (not sent).
@@ -104,14 +106,14 @@ impl ChatRequest {
             model: "system",
             stream: false,
             messages,
-            max_tokens: None,
+            max_completion_tokens: None,
             response_format: None,
             timeout: None,
         }
     }
 
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
-        self.max_tokens = Some(max_tokens);
+        self.max_completion_tokens = Some(max_tokens);
         self
     }
 
@@ -226,7 +228,17 @@ mod tests {
     fn request_should_omit_max_tokens_when_unset() {
         let request = ChatRequest::new(vec![ChatMessage::user("hi")]);
         let json = serde_json::to_value(&request).unwrap();
-        assert!(json.get("max_tokens").is_none());
+        assert!(json.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn request_should_send_the_cap_as_max_completion_tokens() {
+        let request = ChatRequest::new(vec![ChatMessage::user("hi")]).with_max_tokens(40);
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            (json.get("max_completion_tokens"), json.get("max_tokens")),
+            (Some(&serde_json::json!(40)), None)
+        );
     }
 
     #[test]

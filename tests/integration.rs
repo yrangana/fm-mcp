@@ -203,6 +203,108 @@ fn empty_text_should_become_a_tool_error_without_calling_the_model() {
     assert_eq!(server.fake_starts(), 0);
 }
 
+// --- Input from a file ------------------------------------------------------
+
+#[test]
+fn summarise_should_read_text_from_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("notes.md");
+    std::fs::write(&file, "Twelve chars").unwrap();
+    let mut server = Server::start(&[]);
+    let result = server.call_tool("summarise", json!({"path": file}));
+    let sent_the_file = server
+        .fake_log()
+        .iter()
+        .any(|l| l.starts_with("request ") && l.contains("Twelve chars"));
+    assert!(!result.is_error && sent_the_file, "{}", result.text);
+}
+
+#[test]
+fn extract_and_classify_should_send_the_files_text_to_the_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("ticket.txt");
+    std::fs::write(&file, "Charged twice for my plan").unwrap();
+    let mut server = Server::start(&[]);
+    let schema = json!({"type": "object", "properties": {"plan": {"type": "string"}}});
+    server.call_tool("extract", json!({"path": file, "schema": schema}));
+    server.call_tool(
+        "classify",
+        json!({"path": file, "labels": ["billing", "bug"]}),
+    );
+    let sent: Vec<Value> = server
+        .fake_log()
+        .iter()
+        .filter_map(|l| l.strip_prefix("request "))
+        .map(|l| serde_json::from_str::<Value>(l).unwrap()["messages"][1]["content"].clone())
+        .collect();
+    assert_eq!(sent, vec![json!("Charged twice for my plan"); 2]);
+}
+
+#[test]
+fn path_and_text_together_should_be_refused() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool("summarise", json!({"text": "x", "path": "/tmp/x.txt"}));
+    assert_tool_error(&result, "Give `text` or `path`, not both.");
+}
+
+#[test]
+fn a_relative_path_should_be_refused() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "classify",
+        json!({"path": "notes.txt", "labels": ["a", "b"]}),
+    );
+    assert_tool_error(&result, "`path` must be absolute (got `notes.txt`).");
+}
+
+#[test]
+fn a_binary_file_should_be_refused_without_calling_the_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("shot.png");
+    std::fs::write(&file, b"\x89PNG\r\n\x1a\n\0\0").unwrap();
+    let mut server = Server::start(&[]);
+    let result = server.call_tool("summarise", json!({"path": file}));
+    assert_tool_error(
+        &result,
+        &format!(
+            "`{}` is not a UTF-8 text file. For images use `ocr`; convert other formats to text first.",
+            file.display()
+        ),
+    );
+    assert_eq!(server.fake_starts(), 0);
+}
+
+#[test]
+fn a_file_over_1_mb_should_be_refused_without_calling_the_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("huge.log");
+    std::fs::write(&file, "x".repeat(1024 * 1024 + 1)).unwrap();
+    let mut server = Server::start(&[]);
+    let result = server.call_tool("summarise", json!({"path": file}));
+    assert!(
+        result.is_error && result.text.contains("is larger than 1 MB"),
+        "{}",
+        result.text
+    );
+    assert_eq!(server.fake_starts(), 0);
+}
+
+#[test]
+fn an_empty_file_should_be_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("empty.txt");
+    std::fs::write(&file, "\n").unwrap();
+    let mut server = Server::start(&[]);
+    let result = server.call_tool("summarise", json!({"path": file}));
+    assert_tool_error(
+        &result,
+        &format!(
+            "`{}` is empty; there is nothing to summarise.",
+            file.display()
+        ),
+    );
+}
+
 // --- Restarts ---------------------------------------------------------------
 
 #[test]
@@ -419,7 +521,8 @@ fn extract_should_send_a_nullable_schema_with_unique_titles() {
         .unwrap();
     assert_eq!(
         request["response_format"]["json_schema"]["schema"]["properties"]["total"],
-        json!({"title": "Total", "anyOf": [{"type": "number"}, {"type": "null"}]})
+        json!({"title": "Total", "description": "total. Null unless the text states it.",
+               "anyOf": [{"type": "number"}, {"type": "null"}]})
     );
 }
 
@@ -478,6 +581,23 @@ fn extract_runaway_should_become_a_stuck_error() {
 }
 
 #[test]
+fn extract_answer_at_the_length_cap_should_become_a_stuck_error() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "extract",
+        json!({"text": "FAKE_RUN_ON", "schema": {"type": "object", "properties": {"a": {"type": "string"}}}}),
+    );
+    assert!(
+        result.is_error
+            && result
+                .text
+                .starts_with("The on-device model got stuck: its answer ran on"),
+        "{}",
+        result.text
+    );
+}
+
+#[test]
 fn classify_should_return_one_of_the_labels() {
     let mut server = Server::start(&[]);
     let result = server.call_tool(
@@ -498,6 +618,16 @@ fn classify_multi_should_return_a_list_of_labels() {
 }
 
 #[test]
+fn classify_multi_should_drop_repeated_labels() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "classify",
+        json!({"text": "FAKE_REPEAT", "labels": ["bug", "feature"], "multi": true}),
+    );
+    assert_eq!(result.structured, Some(json!({"labels": ["bug"]})));
+}
+
+#[test]
 fn classify_multi_should_ask_for_at_least_one_label_and_room_to_answer() {
     let mut server = Server::start(&[]);
     server.call_tool(
@@ -512,7 +642,7 @@ fn classify_multi_should_ask_for_at_least_one_label_and_room_to_answer() {
         .unwrap();
     let labels = &request["response_format"]["json_schema"]["schema"]["properties"]["labels"];
     assert_eq!(
-        (&labels["minItems"], &request["max_tokens"]),
+        (&labels["minItems"], &request["max_completion_tokens"]),
         (&json!(1), &json!(500))
     );
 }
