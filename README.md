@@ -50,6 +50,21 @@ The plugin gives Claude Code the MCP server and the skill, without `fm-mcp insta
 
 Use the plugin **or** `fm-mcp install` for Claude Code, not both: both together give Claude Code two fm-mcp servers. With the plugin, run `fm-mcp install --codex` to set up Codex only.
 
+### Other MCP clients
+
+fm-mcp is a plain stdio MCP server, so other clients that run local servers on the same Mac can use it. `fm-mcp install` doesn't set them up, and they don't get the delegation guidance: the agent decides from the tool descriptions alone. Each client below was tried on a real Mac; others may work but are untested.
+
+**Claude Desktop** (tried with 2.31226.1, 2026-10-11). In Settings › Developer › Edit Config, add this to `mcpServers` in `claude_desktop_config.json`, then quit and reopen Claude Desktop:
+
+```json
+"fm-mcp": {
+  "command": "/opt/homebrew/bin/fm-mcp",
+  "args": []
+}
+```
+
+Use the full path (`which fm-mcp` prints it). fm-mcp helps most with files on your Mac: give Claude the file's path and it passes `path`, so the text never goes through Claude. For a web page, Claude Desktop reads the page itself first, so delegating it saves nothing.
+
 ## Tools
 
 | Tool | What it does | How much it takes |
