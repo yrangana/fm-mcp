@@ -2,8 +2,6 @@
 
 An MCP server that lets coding agents such as Claude Code and Codex hand simple text work to the on-device model for Apple Foundation Models, the `fm` that ships with macOS 27. It's free, private, and runs offline.
 
-> **Status:** v0.1.0 is being prepared. Until it is tagged, install from source (see [Development](#development)).
-
 <!-- Registry verification for the MCP Registry: keep this line. -->
 mcp-name: io.github.yrangana/fm-mcp
 
