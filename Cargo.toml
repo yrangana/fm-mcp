@@ -7,13 +7,12 @@ description = "MCP server that lets coding agents delegate simple, private work 
 authors = ["Yasiru Rangana <yrangana@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/yrangana/fm-mcp"
+homepage = "https://github.com/yrangana/fm-mcp"
 readme = "README.md"
 keywords = ["mcp", "llm", "on-device", "macos", "claude"]
 categories = ["command-line-utilities", "development-tools"]
 # What goes into a crates.io package. tests/ is needed for the fake-fm bin target.
 include = ["/src", "/tests", "/skills", "/snippets", "/LICENSE", "/README.md"]
-# Not released yet: keep crates.io publishing off until the Phase 7 release.
-publish = false
 
 [features]
 # Builds the `fake-fm` test binary used by the integration tests.
@@ -60,3 +59,7 @@ expect_used = "warn"
 [profile.release]
 lto = "thin"
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
