@@ -39,6 +39,17 @@ It backs up each file before changing it and prints every path it touched; runni
 
 The skill and the AGENTS.md section tell the agent **when** to delegate. Without them the agent sees only the tool descriptions, and delegates less well.
 
+### Or: the Claude Code plugin
+
+The plugin gives Claude Code the MCP server and the skill, without `fm-mcp install`. It still needs the binary on your `PATH`, so install that first (Homebrew above); otherwise Claude Code reports the server as failed to connect.
+
+```
+/plugin marketplace add yrangana/fm-mcp
+/plugin install fm-mcp@fm-mcp
+```
+
+Use the plugin **or** `fm-mcp install` for Claude Code, not both: both together give Claude Code two fm-mcp servers. With the plugin, run `fm-mcp install --codex` to set up Codex only.
+
 ## Tools
 
 | Tool | What it does | How much it takes |
