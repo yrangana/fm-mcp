@@ -2,56 +2,100 @@
 
 An MCP server that lets coding agents such as Claude Code and Codex hand simple text work to the on-device model for Apple Foundation Models, the `fm` that ships with macOS 27. It's free, private, and runs offline.
 
-> **Status: in development, not released yet.** It works from source today with four tools, `summarise`, `extract`, `classify` and `ocr`, plus `fm-mcp install` and `fm-mcp doctor`. Homebrew installation is being built. See [Roadmap](#roadmap).
+> **Status:** v0.1.0 is being prepared. Until it is tagged, install from source (see [Development](#development)).
+
+<!-- Registry verification for the MCP Registry: keep this line. -->
+mcp-name: io.github.yrangana/fm-mcp
 
 ## Why
 
-Coding agents spend paid, remote tokens on simple jobs, like summarising a log or pulling fields out of a document. A small model already on your Mac can do much of that for nothing, and your text never leaves the machine. fm-mcp lets the agent hand off that work, and its tool descriptions tell the agent plainly what the small model can't do.
+Coding agents spend paid, remote tokens on simple jobs, like summarising a log or pulling fields out of a document. A small model already on your Mac can do much of that for nothing, and your text never leaves the machine. fm-mcp lets the agent hand off that work, and tells it plainly what the small model can't do.
 
-## Good for, and not for
+## Install
 
-- **Good for:** summarising logs, documents, notes and transcripts; pulling fields out of text as JSON; sorting text into your categories; reading text in screenshots and photos.
-- **Not for:** code, maths, reasoning, facts the text doesn't contain, or anything where a wrong answer is costly and you can't check it.
-- **Limits:** the model has a small context of about 8K tokens, shared by your input and its answer. Summaries can miss or distort details, so check anything important.
+You need a Mac with **Apple Silicon** (Intel Macs are not supported), **macOS 27** with Apple Intelligence turned on, and the `fm` licence accepted once (`fm license`).
 
-## Requirements
+```sh
+brew install yrangana/tap/fm-mcp
+fm-mcp install    # sets up Claude Code and Codex
+fm-mcp doctor     # checks everything fm-mcp needs
+```
 
-- A Mac with Apple Silicon.
-- macOS 27 with Apple Intelligence turned on.
-- The `fm` licence accepted once: run `fm license`.
+Then start a new Claude Code or Codex session. fm-mcp starts the model server (`fm serve`) itself the first time a tool is called, and stops it when the session ends.
 
-## Build and try it
+Other ways to get the binary:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/yrangana/fm-mcp/releases/latest/download/fm-mcp-installer.sh | sh
+cargo install fm-mcp
+```
+
+### What `fm-mcp install` changes
+
+- **Claude Code:** adds the `fm-mcp` MCP server to `~/.claude.json` (through `claude mcp add` when the `claude` command is there), and installs the `fm-delegate` skill in `~/.claude/skills/`.
+- **Codex:** adds `[mcp_servers.fm-mcp]` to `~/.codex/config.toml`, and a marked section in `~/.codex/AGENTS.md` (or in `AGENTS.override.md`, if you use one).
+
+It backs up each file before changing it and prints every path it touched; running it again changes nothing. `--claude` or `--codex` picks one agent, `--dry-run` shows the changes without writing, and `--no-guidance` skips the skill and the AGENTS.md section. `fm-mcp install --uninstall` removes everything it added.
+
+The skill and the AGENTS.md section tell the agent **when** to delegate. Without them the agent sees only the tool descriptions, and delegates less well.
+
+## Tools
+
+| Tool | What it does | How much it takes |
+|---|---|---|
+| `summarise` | Condenses logs, documents, notes and transcripts into a gist: a paragraph, or at most 7 bullets. Not a full record. | About 30,000 words of prose, but only about 1,000 lines of a dense log. Long input is split and combined, which takes a minute or two and can drop details. |
+| `extract` | Pulls named fields out of one text as JSON, from a JSON Schema you give. Works best with a flat schema. | About 3,500 words of prose. |
+| `classify` | Sorts one text into labels you choose (one label, or several with `multi`). | About 3,500 words of prose. |
+| `ocr` | Reads the text in a PNG, JPEG, HEIC, TIFF, GIF or BMP image. Not PDF. | One image. |
+
+`summarise`, `extract` and `classify` take `text`, or a `path` to a text file (up to 1 MB) so the agent never has to read the file itself.
+
+### Limits
+
+- **Small model, small context:** about 8K tokens, shared by the input and the answer. Logs full of IDs and numbers use far more tokens per word than prose.
+- **Not for** code, maths, reasoning, facts the text doesn't contain, or anything where a wrong answer is costly and you can't check it.
+- **It makes mistakes.** Summaries can drop or distort details. `extract` usually returns `null` for a field the text doesn't contain, but when the text has something close in meaning (no PO number, but line items), about 1 in 3 such fields gets a wrong value. Nested schemas are less reliable than flat ones. Check what matters.
+- **One request at a time.** The model is shared by every session on the Mac, so calls queue: a short `extract` takes 1–2 s, a long `summarise` a minute or more.
+- **Safety filter:** the on-device model sometimes refuses harmless input. fm-mcp reports that clearly, and the agent does the task itself.
+
+## Privacy
+
+Everything runs on your Mac. fm-mcp talks to `fm serve` over a local Unix socket and sends nothing over the network. Your text goes only to the on-device model.
+
+## Troubleshooting
+
+Run `fm-mcp doctor`. It checks the Mac, macOS, `fm`, the licence, the model, a test request, and both agents' setup, and says how to fix anything that fails.
+
+| Problem | Fix |
+|---|---|
+| Licence not agreed | Run `fm license` once. |
+| Model not available | Turn on Apple Intelligence in System Settings and wait for the model to finish downloading. |
+| A tool says the model "got stuck" | Usually a schema with fields the text doesn't contain, or another session using the model. Try a flatter schema. |
+| A tool times out on long input | Raise the limit: set `FM_MCP_REQUEST_TIMEOUT_SECS` (default 120) in the MCP server's environment. |
+| You need more detail | Set `FM_MCP_LOG=debug` in the MCP server's environment. fm-mcp logs to stderr only (stdout carries the MCP protocol). |
+
+## Uninstall
+
+```sh
+fm-mcp install --uninstall
+brew uninstall fm-mcp
+```
+
+## Development
 
 ```sh
 git clone https://github.com/yrangana/fm-mcp.git
 cd fm-mcp
 cargo build --release
-./target/release/fm-mcp install --dry-run   # shows what would change
-./target/release/fm-mcp install             # configures Claude Code and Codex
-./target/release/fm-mcp doctor              # checks everything fm-mcp needs
-```
+./target/release/fm-mcp install    # points your agents at this build
 
-`install` configures every agent it finds; `--claude` or `--codex` picks one. It backs up each file before changing it, prints every path it touched, and running it again changes nothing. It also installs a Claude Code skill and an AGENTS.md section for Codex that say when to delegate; `--no-guidance` skips them. `fm-mcp install --uninstall` removes everything it added.
-
-Then start a new session and ask Claude Code, for example, to "summarise this log with fm-mcp" or "read the text in this screenshot with fm-mcp". fm-mcp starts `fm serve` on its own the first time a tool is called, and stops it when the session ends.
-
-## Development
-
-```sh
-cargo test --features fake-fm   # needs no Apple Intelligence: uses a fake fm
+cargo test --features fake-fm      # needs no Apple Intelligence: uses a fake fm
 cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --check
+scripts/real_fm_smoke.sh           # checks against the real fm on this Mac
 ```
 
-[AGENTS.md](AGENTS.md) has the architecture, the tested facts about `fm serve`, and the project rules.
-
-## Roadmap
-
-- [x] `summarise` over `fm serve`, with restarts, clear errors and clean shutdown
-- [x] `extract` (JSON Schema), `classify`, `ocr`; long input for `summarise`
-- [x] Guidance that tells agents when to delegate (a Claude Code skill and an AGENTS.md snippet)
-- [x] `fm-mcp install` (sets up Claude Code and Codex) and `fm-mcp doctor`. The Codex setup still needs a check on a real Codex install.
-- [ ] Release: Homebrew (`brew install yrangana/tap/fm-mcp`), a shell installer, the MCP Registry and a Claude plugin
+[AGENTS.md](AGENTS.md) has the architecture, the tested facts about `fm serve`, and the project rules. [docs/MANUAL_TEST.md](docs/MANUAL_TEST.md) is the checklist for each release.
 
 ## Licence
 
