@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "fm-mcp": {
+      "type": "stdio",
+      "command": "fm-mcp"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "fm-mcp",
+  "description": "fm-mcp: hand simple text work to the on-device model for Apple Foundation Models.",
+  "owner": {
+    "name": "Yasiru Rangana",
+    "email": "yrangana@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "fm-mcp",
+      "source": "./plugin",
+      "description": "Delegate summarising, extraction, classification and OCR to the on-device model for Apple Foundation Models (macOS 27). Needs the fm-mcp binary first: brew install yrangana/tap/fm-mcp."
+    }
+  ]
+}

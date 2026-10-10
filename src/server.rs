@@ -564,7 +564,8 @@ fn too_long_for_summarise(tokens: Option<usize>) -> String {
 
 /// One "- " bullet per non-empty line. The model sometimes doubles the marker
 /// ("- - "), so up to two markers are removed; a third `-` is kept, since it may
-/// be a minus sign ("- -5 °C" stays "- -5 °C").
+/// be a minus sign ("- -5 °C" stays "- -5 °C"). It also sometimes quotes each
+/// bullet (`"- text",`, seen 2026-10-11), so a line quoted end to end is unwrapped.
 fn normalise_bullets(summary: &str) -> String {
     fn strip_marker(line: &str) -> &str {
         let line = line.trim_start();
@@ -575,9 +576,18 @@ fn normalise_bullets(summary: &str) -> String {
             _ => line,
         }
     }
+    fn unquote(line: &str) -> &str {
+        let trimmed = line.trim_end();
+        let trimmed = trimmed.strip_suffix(',').unwrap_or(trimmed);
+        [('"', '"'), ('\u{201c}', '\u{201d}')]
+            .iter()
+            .find_map(|&(open, close)| trimmed.strip_prefix(open)?.strip_suffix(close))
+            .filter(|inner| !inner.trim().is_empty())
+            .unwrap_or(line)
+    }
     summary
         .lines()
-        .map(|line| strip_marker(strip_marker(line)))
+        .map(|line| strip_marker(strip_marker(unquote(strip_marker(line)))))
         .filter(|line| !line.is_empty())
         .map(|line| format!("- {line}"))
         .collect::<Vec<_>>()
@@ -761,6 +771,22 @@ mod tests {
         assert_eq!(
             normalise_bullets("- - first\n\n- second\n* third"),
             "- first\n- second\n- third"
+        );
+    }
+
+    #[test]
+    fn normalise_bullets_should_unwrap_quoted_bullets() {
+        assert_eq!(
+            normalise_bullets("\"- Nansen was a polymath.\",\n- \"- He crossed Greenland.\""),
+            "- Nansen was a polymath.\n- He crossed Greenland."
+        );
+    }
+
+    #[test]
+    fn normalise_bullets_should_keep_quotes_inside_a_bullet() {
+        assert_eq!(
+            normalise_bullets("- He wrote \"Farthest North\" in 1897"),
+            "- He wrote \"Farthest North\" in 1897"
         );
     }
 

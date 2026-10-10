@@ -1,0 +1,13 @@
+{
+  "name": "fm-mcp",
+  "version": "0.1.0",
+  "description": "Delegate summarising, extraction, classification and OCR to the free, private on-device model for Apple Foundation Models (macOS 27). Needs the fm-mcp binary: brew install yrangana/tap/fm-mcp.",
+  "author": {
+    "name": "Yasiru Rangana",
+    "email": "yrangana@gmail.com"
+  },
+  "homepage": "https://github.com/yrangana/fm-mcp",
+  "repository": "https://github.com/yrangana/fm-mcp",
+  "license": "MIT",
+  "keywords": ["mcp", "on-device", "macos", "summarise", "ocr"]
+}
