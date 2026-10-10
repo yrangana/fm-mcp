@@ -65,6 +65,16 @@ fm-mcp is a plain stdio MCP server, so other clients that run local servers on t
 
 Use the full path (`which fm-mcp` prints it). fm-mcp helps most with files on your Mac: give Claude the file's path and it passes `path`, so the text never goes through Claude. For a web page, Claude Desktop reads the page itself first, so delegating it saves nothing.
 
+**Devin (formerly Windsurf)** (tried with Devin.app 3.8.20, 2026-10-11). Add this to `mcpServers` in `~/.config/devin/mcp_config.json`:
+
+```json
+"fm-mcp": {
+  "type": "stdio",
+  "command": "/opt/homebrew/bin/fm-mcp",
+  "args": []
+}
+```
+
 ## Tools
 
 | Tool | What it does | How much it takes |
