@@ -11,7 +11,9 @@ Coding agents spend paid, remote tokens on simple jobs, like summarising a log o
 
 ## Install
 
-You need a Mac with **Apple Silicon** (Intel Macs are not supported), **macOS 27** with Apple Intelligence turned on, and the `fm` licence accepted once (`fm license`).
+fm-mcp is a **public beta** (0.1.x): it works and is tested, but tool details may change between releases. [CHANGELOG.md](CHANGELOG.md) lists what changed.
+
+You need a Mac with **Apple Silicon** (Intel Macs are not supported), **macOS 27** with Apple Intelligence turned on, and the `fm` licence accepted once (`fm license`). That's the whole support policy: `fm-mcp doctor` checks each of these, and nothing else is supported.
 
 No Homebrew yet? Install it from [brew.sh](https://brew.sh) first. Its installer asks to install Xcode's command line tools: accept, and let it finish.
 
@@ -84,19 +86,19 @@ Use the full path (`which fm-mcp` prints it). fm-mcp helps most with files on yo
 | `classify` | Sorts one text into labels you choose (one label, or several with `multi`). | About 3,500 words of prose. |
 | `ocr` | Reads the text in a PNG, JPEG, HEIC, TIFF, GIF or BMP image. Not PDF. | One image. |
 
-`summarise`, `extract` and `classify` take `text`, or a `path` to a text file (up to 1 MB) so the agent never has to read the file itself.
+`summarise`, `extract` and `classify` take `text`, or a `path` to a text file (up to 1 MB) so the agent never has to read the file itself. [docs/TOOLS.md](docs/TOOLS.md) lists every parameter, with example calls.
 
 ### Limits
 
 - **Small model, small context:** about 8K tokens, shared by the input and the answer. Logs full of IDs and numbers use far more tokens per word than prose.
 - **Not for** code, maths, reasoning, facts the text doesn't contain, or anything where a wrong answer is costly and you can't check it.
-- **It makes mistakes.** Summaries can drop or distort details. `extract` usually returns `null` for a field the text doesn't contain, but when the text has something close in meaning (no PO number, but line items), about 1 in 3 such fields gets a wrong value. Nested schemas are less reliable than flat ones. Check what matters.
+- **It makes mistakes.** Summaries can drop or distort details. `extract` often returns `null` for a field the text doesn't contain, but not reliably: in tests a missing field also came back as a wrong value taken from nearby text (a PO number filled with the supplier's name), or made the model run on until fm-mcp stopped it with a "got stuck" error. Ask only for fields the text is likely to have. Nested schemas are less reliable than flat ones. Check what matters.
 - **One request at a time.** The model is shared by every session on the Mac, so calls queue: a short `extract` takes 1–2 s, a long `summarise` a minute or more.
 - **Safety filter:** the on-device model sometimes refuses harmless input. fm-mcp reports that clearly, and the agent does the task itself.
 
 ## Privacy
 
-Everything runs on your Mac. fm-mcp talks to `fm serve` over a local Unix socket and sends nothing over the network. Your text goes only to the on-device model.
+Everything runs on your Mac. fm-mcp talks to `fm serve` over a local Unix socket and sends nothing over the network. Your text goes only to the on-device model. [SECURITY.md](SECURITY.md) has the details, and how to report a security problem privately.
 
 ## Troubleshooting
 

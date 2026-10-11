@@ -695,3 +695,101 @@ fn ocr_should_refuse_pdfs_with_advice() {
         result.text
     );
 }
+
+// --- docs/TOOLS.md ----------------------------------------------------------
+
+/// The order the README and docs/TOOLS.md list the tools in.
+const DOC_ORDER: [&str; 4] = ["summarise", "extract", "classify", "ocr"];
+const TOOLS_START: &str = "<!-- tools:start (generated from tools/list by a test; run `UPDATE_DOCS=1 cargo test --features fake-fm tools_md` to refresh) -->";
+const TOOLS_END: &str = "<!-- tools:end -->";
+
+/// One line of Markdown table cell text: no line breaks, no bare pipes.
+fn cell(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('|', "\\|")
+}
+
+fn param_type(param: &Value) -> String {
+    let base = param["type"].as_str().unwrap_or("any");
+    if let Some(options) = param["enum"].as_array() {
+        let options: Vec<String> = options
+            .iter()
+            .map(|o| format!("`{}`", o.as_str().unwrap()))
+            .collect();
+        return format!("{base}: {}", options.join(", "));
+    }
+    match param["items"]["type"].as_str() {
+        Some(item) => format!("array of {item}"),
+        None => base.to_owned(),
+    }
+}
+
+fn render_tools(tools: &[Value]) -> String {
+    let mut out = String::new();
+    for name in DOC_ORDER {
+        let tool = tools.iter().find(|t| t["name"] == name).unwrap();
+        let schema = &tool["inputSchema"];
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .map(|r| r.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "\n## `{name}`: {}\n\n{}\n\n| Parameter | Type | Required | Default | What it is |\n|---|---|---|---|---|\n",
+            tool["annotations"]["title"].as_str().unwrap(),
+            tool["description"].as_str().unwrap()
+        ));
+        for (param, spec) in schema["properties"].as_object().unwrap() {
+            let default = match &spec["default"] {
+                Value::Null => String::new(),
+                Value::String(s) if s.is_empty() => "empty".to_owned(),
+                other => format!(
+                    "`{}`",
+                    other
+                        .as_str()
+                        .map_or_else(|| other.to_string(), str::to_owned)
+                ),
+            };
+            out.push_str(&format!(
+                "| `{param}` | {} | {} | {default} | {} |\n",
+                param_type(spec),
+                if required.contains(&param.as_str()) {
+                    "yes"
+                } else {
+                    "no"
+                },
+                cell(spec["description"].as_str().unwrap_or(""))
+            ));
+        }
+    }
+    out
+}
+
+#[test]
+fn tools_md_should_match_the_tool_list() {
+    let mut server = Server::start(&[]);
+    let response = server.request("tools/list", json!({}));
+    let generated = render_tools(response["result"]["tools"].as_array().unwrap());
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/TOOLS.md");
+    let doc = std::fs::read_to_string(&path).unwrap();
+    let (before, rest) = doc
+        .split_once(TOOLS_START)
+        .expect("docs/TOOLS.md lacks the start marker");
+    let (current, after) = rest
+        .split_once(TOOLS_END)
+        .expect("docs/TOOLS.md lacks the end marker");
+    let wanted = format!("{generated}\n");
+    if std::env::var_os("UPDATE_DOCS").is_some() {
+        std::fs::write(
+            &path,
+            format!("{before}{TOOLS_START}\n{wanted}{TOOLS_END}{after}"),
+        )
+        .unwrap();
+        return;
+    }
+    assert!(
+        current.trim() == wanted.trim(),
+        "docs/TOOLS.md is out of date: run `UPDATE_DOCS=1 cargo test --features fake-fm tools_md`"
+    );
+}
