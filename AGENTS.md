@@ -6,7 +6,7 @@ Guidance for coding agents (Claude Code, Codex) working in this repository.
 
 **fm-mcp** — an MCP server that lets coding agents hand cheap, private, simple work to Apple's on-device Foundation Model (the `fm` that ships with macOS 27). Free, offline, one-command install.
 
-**Status:** v1 is being built in phases. Current state: `plans/STATUS.md` and `plans/active/FM_MCP_V1.md`.
+**Status:** v0.1.0 released 2026-10-11. Current state: `plans/STATUS.md`; the v1 plan is `plans/shipped/FM_MCP_V1.md`.
 
 ## The goal
 
