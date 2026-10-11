@@ -1,0 +1,15 @@
+name: Feature request
+description: Something you'd like fm-mcp to do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: job
+    attributes:
+      label: What you want to hand to the on-device model
+      description: The task, and what you do today instead.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: An example input and the answer you'd want

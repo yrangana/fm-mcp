@@ -1,0 +1,30 @@
+name: Bug report
+description: Something fm-mcp does wrong.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead. Paste the tool's error message if there was one.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: fm-mcp doctor
+      description: Paste the output of `fm-mcp doctor`. It shows your macOS, fm and agent setup.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Agent or client, and its version
+      placeholder: Claude Code 2.1.295
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug log (optional)
+      description: Set `FM_MCP_LOG=debug` in the MCP server's environment, repeat the problem, and paste the fm-mcp lines. Leave out any private text.
+      render: text
