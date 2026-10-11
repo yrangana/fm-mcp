@@ -19,7 +19,7 @@ Summarise text with the on-device model for Apple Foundation Models. Free, priva
 
 ## `extract`: Extract fields as JSON (on-device)
 
-Extract fields from text into JSON matching a JSON Schema, with the on-device model for Apple Foundation Models (free, private, offline). Good for names, dates, amounts and IDs in short documents, emails or logs. Input up to about 3,500 words; pass `path` to a text file instead of `text` so you don't have to read it first. Fields the text lacks usually come back as null. Flat schemas work best; nested objects are unreliable. Allowed keywords: type, properties, required, items, enum, const, description, minItems, maxItems. Not for code or reasoning. Values can be wrong; check what matters.
+Extract fields from text into JSON matching a JSON Schema, with the on-device model for Apple Foundation Models (free, private, offline). Good for names, dates, amounts and IDs in short documents, emails, logs. Input up to about 3,500 words, as `text` or `path` to a text file. Ask only for fields the text likely states: a missing one is often null but may take a wrong value from nearby text. Flat schemas work best; nested ones are unreliable. Allowed keywords: type, properties, required, items, enum, const, description, minItems, maxItems. Not for code or reasoning; check values that matter.
 
 | Parameter | Type | Required | Default | What it is |
 |---|---|---|---|---|
@@ -53,7 +53,7 @@ Read the text in an image file (screenshot, scanned page, receipt, handwriting) 
 
 ## Example calls
 
-The arguments an agent sends, as JSON. Each was run against the real model on macOS 27.0.1 with fm-mcp 0.1.0.
+The arguments an agent sends, as JSON. Each was run against the real model on macOS 27.0.1 with fm-mcp 0.1.1.
 
 **`summarise`** a log file, errors only, as bullets:
 
@@ -61,12 +61,11 @@ The arguments an agent sends, as JSON. Each was run against the real model on ma
 {"path": "/Users/me/logs/build.log", "focus": "errors only", "length": "bullets"}
 ```
 
-**`extract`** an invoice's fields. For amounts written with a currency sign or commas (`$1,280.00`), say how to write them in `instructions`; without that, a `number` field often comes back `null`. Ask only for fields the text is likely to have: a missing field can come back as `null`, as a wrong value, or as the "got stuck" error:
+**`extract`** an invoice's fields. A `number` field can be written in the text as `$1,280.00` or `AUD 12,450.50`: fm-mcp reads the amount, or returns `null` if it isn't plainly one number. Ask only for fields the text is likely to have: a missing field can come back as `null` or as a wrong value taken from nearby text:
 
 ```json
 {
   "text": "Invoice INV-2041 from Northwind Traders, dated 3 March 2026. Total due: $1,280.00 by 2 April 2026.",
-  "instructions": "Write amounts as plain numbers, without currency signs or commas.",
   "schema": {
     "type": "object",
     "properties": {

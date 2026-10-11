@@ -154,10 +154,14 @@ impl Server {
         ToolResult {
             structured: result.get("structuredContent").cloned(),
             is_error: result["isError"].as_bool().unwrap_or(false),
-            text: result["content"][0]["text"]
-                .as_str()
-                .unwrap_or_default()
-                .to_owned(),
+            // Every text block, one per line (extract adds a note after the JSON).
+            text: result["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|block| block["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
         }
     }
 

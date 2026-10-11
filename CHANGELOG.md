@@ -2,10 +2,12 @@
 
 One entry per release. The release workflow uses the entry as the GitHub release notes.
 
-## Unreleased
+## 0.1.1 - 2026-10-11
 
+- `extract` reads amounts in `number` and `integer` fields itself: the model copies `$1,280.00` or `AUD 12,450.50` as text and fm-mcp turns it into a number, or `null` if it isn't plainly one number. Before, such amounts often came back `null`. Over 5 invoices, `total` was right in every answer the model finished; 0.1.0 got 40 of 50 right.
+- `extract` keeps the finished fields when the model gets stuck on one, on a flat schema: the stuck field is set to `null`, and a note names it. Before, the whole answer was discarded with a "got stuck" error. With two fields the text lacked, 0 of 25 calls returned an error (0.1.0: 13 of 25), though a missing field close in meaning can still take a wrong value.
 - README: installing Homebrew first asks to install Xcode's command line tools.
-- README: `extract` limits are more cautious. New tests showed a missing field can come back as a wrong value or the "got stuck" error, not only `null`, and that `$1,280.00` in a `number` field needs a line in `instructions`.
+- README and the `extract` description: a field the text lacks can come back as a wrong value from nearby text, not only `null`.
 - New `docs/TOOLS.md`: every tool and parameter, generated from the descriptions the server sends, with example calls.
 - `CHANGELOG.md`, `SECURITY.md` and issue templates.
 

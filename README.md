@@ -92,7 +92,7 @@ Use the full path (`which fm-mcp` prints it). fm-mcp helps most with files on yo
 
 - **Small model, small context:** about 8K tokens, shared by the input and the answer. Logs full of IDs and numbers use far more tokens per word than prose.
 - **Not for** code, maths, reasoning, facts the text doesn't contain, or anything where a wrong answer is costly and you can't check it.
-- **It makes mistakes.** Summaries can drop or distort details. `extract` often returns `null` for a field the text doesn't contain, but not reliably: in tests a missing field also came back as a wrong value taken from nearby text (a PO number filled with the supplier's name), or made the model run on until fm-mcp stopped it with a "got stuck" error. Ask only for fields the text is likely to have. Nested schemas are less reliable than flat ones. Check what matters.
+- **It makes mistakes.** Summaries can drop or distort details. `extract` often returns `null` for a field the text doesn't contain, but not reliably: on short invoices a missing PO number took the supplier's name in 10 of 25 runs. When the model gets stuck on a field, fm-mcp keeps the finished fields, sets the stuck one to `null` and says so; that call takes about 15 s. Ask only for fields the text is likely to have. Nested schemas are less reliable than flat ones. Check what matters.
 - **One request at a time.** The model is shared by every session on the Mac, so calls queue: a short `extract` takes 1–2 s, a long `summarise` a minute or more.
 - **Safety filter:** the on-device model sometimes refuses harmless input. fm-mcp reports that clearly, and the agent does the task itself.
 

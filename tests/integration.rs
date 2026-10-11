@@ -507,7 +507,7 @@ fn extract_should_return_json_matching_the_schema() {
 }
 
 #[test]
-fn extract_should_send_a_nullable_schema_with_unique_titles() {
+fn extract_should_send_a_nullable_schema_with_unique_titles_and_numbers_as_text() {
     let mut server = Server::start(&[]);
     server.call_tool(
         "extract",
@@ -522,7 +522,63 @@ fn extract_should_send_a_nullable_schema_with_unique_titles() {
     assert_eq!(
         request["response_format"]["json_schema"]["schema"]["properties"]["total"],
         json!({"title": "Total", "description": "total. Null unless the text states it.",
-               "anyOf": [{"type": "number"}, {"type": "null"}]})
+               "anyOf": [{"type": "string"}, {"type": "null"}]})
+    );
+}
+
+#[test]
+fn extract_cut_off_on_a_flat_schema_should_keep_the_finished_fields() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "extract",
+        json!({"text": "FAKE_STUCK FAKE_AMOUNT", "schema": {"type": "object", "properties": {
+            "invoice": {"type": "string"}, "tracking": {"type": "string"}}}}),
+    );
+    assert!(
+        !result.is_error
+            && result.structured == Some(json!({"invoice": "$1,280.50", "tracking": null}))
+            && result
+                .text
+                .contains("got stuck on `tracking`, so fm-mcp set it to null"),
+        "{:?} {}",
+        result.structured,
+        result.text
+    );
+}
+
+#[test]
+fn extract_cut_off_on_a_nested_schema_should_be_a_stuck_error() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "extract",
+        json!({"text": "FAKE_STUCK", "schema": {"type": "object", "properties": {
+            "invoice": {"type": "string"}, "lines": {"type": "array", "items": {"type": "string"}}}}}),
+    );
+    assert!(
+        result.is_error
+            && result
+                .text
+                .starts_with("The on-device model got stuck: its answer ran on"),
+        "{}",
+        result.text
+    );
+}
+
+#[test]
+fn extract_should_turn_a_copied_amount_into_a_number() {
+    let mut server = Server::start(&[]);
+    let result = server.call_tool(
+        "extract",
+        json!({"text": "FAKE_AMOUNT", "schema": {"type": "object", "properties": {
+            "total": {"type": "number"}, "count": {"type": "integer"}, "note": {"type": "string"}}}}),
+    );
+    // The fake writes $1,280.50 into every field: a number, not an integer, not changed text.
+    assert_eq!(
+        (result.is_error, result.structured),
+        (
+            false,
+            Some(json!({"total": 1280.5, "count": null, "note": "$1,280.50"}))
+        )
     );
 }
 
