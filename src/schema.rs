@@ -166,6 +166,179 @@ fn rewrite(
     }
 }
 
+/// The schema sent to the model: `prepared` with every `number` and `integer`
+/// field asked for as text, which [`read_numbers`] turns back into numbers.
+/// Told to copy values exactly, the model often wrote `$1,280.00` in a number
+/// field as `null` (10 of 50 runs over 5 invoices), and telling it to drop the
+/// `$` and commas made it drop the decimal point too (`12,450.50` became
+/// `1245050`). Asked for text, it copied every amount it finished (46 of 46),
+/// measured 2026-10-11.
+pub fn for_model(prepared: &Value) -> Value {
+    let mut schema = prepared.clone();
+    numbers_as_text(&mut schema);
+    schema
+}
+
+fn numbers_as_text(node: &mut Value) {
+    if let Some(options) = node.get_mut("anyOf").and_then(Value::as_array_mut) {
+        for option in options {
+            if numeric(option).is_some() {
+                option["type"] = json!("string");
+            }
+        }
+        return;
+    }
+    if let Some(properties) = node.get_mut("properties").and_then(Value::as_object_mut) {
+        properties.values_mut().for_each(numbers_as_text);
+    }
+    if let Some(items) = node.get_mut("items") {
+        numbers_as_text(items);
+    }
+}
+
+/// `Some(true)` for an integer field, `Some(false)` for a number field, `None`
+/// otherwise. A field with `enum` or `const` is left to the model as it is.
+fn numeric(node: &Value) -> Option<bool> {
+    if node.get("enum").is_some() || node.get("const").is_some() {
+        return None;
+    }
+    match node["type"].as_str() {
+        Some("integer") => Some(true),
+        Some("number") => Some(false),
+        _ => None,
+    }
+}
+
+/// Turns the text the model wrote for each number field (see [`for_model`])
+/// into a number, or `null` when it isn't plainly one amount.
+pub fn read_numbers(value: &mut Value, prepared: &Value) {
+    if let Some(options) = prepared["anyOf"].as_array() {
+        if let (Some(integer), Value::String(text)) = (options.iter().find_map(numeric), &*value) {
+            *value = parse_number(text, integer).unwrap_or(Value::Null);
+        }
+        return;
+    }
+    if let (Some(properties), Some(object)) =
+        (prepared["properties"].as_object(), value.as_object_mut())
+    {
+        for (name, sub) in properties {
+            if let Some(child) = object.get_mut(name) {
+                read_numbers(child, sub);
+            }
+        }
+    }
+    if let Some(items) = value.as_array_mut() {
+        for item in items {
+            read_numbers(item, &prepared["items"]);
+        }
+    }
+}
+
+/// Reads one amount such as `1280`, `$1,280.00`, `AUD 12,450.50`, `-4.5` or
+/// `3,000 USD`: an optional currency code and sign, then digits with optional
+/// thousands commas and decimals. Anything else (`about 300`, `1.234,56`,
+/// `2 hours`) is `None`, so a value the model mangled becomes `null`, not a
+/// wrong number.
+fn parse_number(text: &str, integer: bool) -> Option<Value> {
+    let mut rest = text.trim();
+    let negative = strip(&mut rest, "-");
+    strip_code(&mut rest, true);
+    let negative = negative | strip(&mut rest, "-");
+    for sign in ["$", "€", "£", "¥"] {
+        if strip(&mut rest, sign) {
+            break;
+        }
+    }
+    let negative = negative | strip(&mut rest, "-");
+    strip_code(&mut rest, false);
+
+    let (whole, fraction) = match rest.split_once('.') {
+        Some((whole, fraction)) => (whole, Some(fraction)),
+        None => (rest, None),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let grouped = match whole.split(',').collect::<Vec<_>>().as_slice() {
+        [single] => digits(single),
+        [first, groups @ ..] => {
+            digits(first) && first.len() <= 3 && groups.iter().all(|g| g.len() == 3 && digits(g))
+        }
+        [] => false,
+    };
+    if !grouped || fraction.is_some_and(|f| !digits(f)) {
+        return None;
+    }
+    let plain = format!(
+        "{}{}",
+        if negative { "-" } else { "" },
+        whole.replace(',', "")
+    );
+    match fraction {
+        None => plain.parse::<i64>().ok().map(Value::from),
+        Some(f) if integer && f.bytes().all(|b| b == b'0') => {
+            plain.parse::<i64>().ok().map(Value::from)
+        }
+        Some(_) if integer => None,
+        Some(f) => format!("{plain}.{f}").parse::<f64>().ok().map(Value::from),
+    }
+}
+
+/// Removes `prefix` (and the spaces after it) from the start of `rest`.
+fn strip(rest: &mut &str, prefix: &str) -> bool {
+    match rest.strip_prefix(prefix) {
+        Some(after) => {
+            *rest = after.trim_start();
+            true
+        }
+        None => false,
+    }
+}
+
+/// Removes a three-letter currency code such as `AUD` from the start, or from
+/// the end when `leading` is false.
+fn strip_code(rest: &mut &str, leading: bool) {
+    let is_code = |s: &str| s.len() == 3 && s.bytes().all(|b| b.is_ascii_uppercase());
+    if leading {
+        if let Some(code) = rest.get(..3)
+            && is_code(code)
+        {
+            *rest = rest[3..].trim_start();
+        }
+    } else if let Some((amount, code)) = rest.rsplit_once(' ')
+        && is_code(code)
+    {
+        *rest = amount.trim_end();
+    }
+}
+
+/// Rescues an answer the cap cut off. On a flat schema the field the model was
+/// stuck on is left out and the finished fields are whole: 12 of 12 runaways on
+/// short invoices left out the field the text lacked, with nothing broken in the
+/// rest (2026-10-11). So each left-out field becomes null and is returned by
+/// name. `None` when that can't be trusted: a nested schema, or no field left
+/// out (the cut may then be inside a value).
+pub fn fill_stuck(value: &mut Value, prepared: &Value) -> Option<Vec<String>> {
+    let properties = prepared["properties"].as_object()?;
+    let nullable = |p: &Value| p.get("anyOf").is_some();
+    let scalar = |p: &Value| nullable(p) || p.get("enum").is_some() || p.get("const").is_some();
+    if !properties.values().all(scalar) {
+        return None;
+    }
+    let object = value.as_object_mut()?;
+    let stuck: Vec<String> = properties
+        .iter()
+        .filter(|(name, _)| !object.contains_key(*name))
+        .map(|(name, _)| name.clone())
+        .collect();
+    // An enum field can't be null, so a cut that left one out can't be rescued.
+    if stuck.is_empty() || stuck.iter().any(|name| !nullable(&properties[name])) {
+        return None;
+    }
+    for name in &stuck {
+        object.insert(name.clone(), Value::Null);
+    }
+    Some(stuck)
+}
+
 /// Reads `type`, accepting `["<type>", "null"]` (a common way to say "optional").
 fn node_type(node: &Value, path: &[String]) -> Result<(Option<String>, bool), String> {
     match &node["type"] {
@@ -335,6 +508,136 @@ mod tests {
             },
             "required": ["invoice"]
         })
+    }
+
+    #[test]
+    fn fill_stuck_should_null_the_fields_a_cut_answer_left_out() {
+        let prepared = prepare(&json!({"type": "object", "properties": {
+            "invoice": {"type": "string"}, "tracking": {"type": "string"}}}))
+        .unwrap();
+        let mut answer = json!({"invoice": "INV-7"});
+        let stuck = fill_stuck(&mut answer, &prepared);
+        assert_eq!(
+            (stuck, answer),
+            (
+                Some(vec!["tracking".to_owned()]),
+                json!({"invoice": "INV-7", "tracking": null})
+            )
+        );
+    }
+
+    #[test]
+    fn fill_stuck_should_not_trust_a_cut_answer_with_every_field() {
+        let prepared =
+            prepare(&json!({"type": "object", "properties": {"invoice": {"type": "string"}}}))
+                .unwrap();
+        assert_eq!(
+            fill_stuck(&mut json!({"invoice": "INV-7 and junk"}), &prepared),
+            None
+        );
+    }
+
+    #[test]
+    fn fill_stuck_should_not_trust_a_nested_schema() {
+        let prepared = prepare(&json!({"type": "object", "properties": {
+            "invoice": {"type": "string"},
+            "lines": {"type": "array", "items": {"type": "string"}}}}))
+        .unwrap();
+        assert_eq!(
+            fill_stuck(&mut json!({"invoice": "INV-7"}), &prepared),
+            None
+        );
+    }
+
+    #[test]
+    fn for_model_should_ask_for_number_fields_as_text() {
+        let prepared = prepare(&json!({"type": "object", "properties": {
+            "total": {"type": "number"},
+            "lines": {"type": "array", "items": {"type": "object", "properties": {"qty": {"type": "integer"}}}},
+            "vat": {"type": "number", "enum": [10, 20]}
+        }}))
+        .unwrap();
+        let sent = for_model(&prepared);
+        assert_eq!(
+            (
+                &sent["properties"]["total"]["anyOf"][0]["type"],
+                &sent["properties"]["lines"]["items"]["properties"]["qty"]["anyOf"][0]["type"],
+                &sent["properties"]["vat"]["anyOf"][0]["type"],
+            ),
+            (&json!("string"), &json!("string"), &json!("number"))
+        );
+    }
+
+    #[test]
+    fn read_numbers_should_turn_copied_amounts_into_numbers() {
+        let prepared = prepare(&json!({"type": "object", "properties": {
+            "total": {"type": "number"},
+            "note": {"type": "string"},
+            "lines": {"type": "array", "items": {"type": "object", "properties": {"qty": {"type": "integer"}}}}
+        }}))
+        .unwrap();
+        let mut answer = json!({"total": "$1,280.50", "note": "12", "lines": [{"qty": "3"}, {"qty": "2 boxes"}]});
+        read_numbers(&mut answer, &prepared);
+        assert_eq!(
+            answer,
+            json!({"total": 1280.5, "note": "12", "lines": [{"qty": 3}, {"qty": null}]})
+        );
+    }
+
+    #[test]
+    fn parse_number_should_read_common_amounts() {
+        let read = |text| parse_number(text, false);
+        assert_eq!(
+            [
+                read("1280"),
+                read("$1,280.00"),
+                read("AUD 12,450.50"),
+                read("USD 3,000"),
+                read("3,000 EUR"),
+                read("-$4.50"),
+                read("£ 0.99"),
+            ],
+            [
+                Some(json!(1280)),
+                Some(json!(1280.0)),
+                Some(json!(12450.5)),
+                Some(json!(3000)),
+                Some(json!(3000)),
+                Some(json!(-4.5)),
+                Some(json!(0.99)),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_number_should_refuse_anything_but_one_plain_amount() {
+        let refused: Vec<_> = [
+            "about 300",
+            "1.234,56",
+            "3,00",
+            "12,4567",
+            "2 hours",
+            "",
+            "$",
+            "1.2.3",
+            "N/A",
+        ]
+        .into_iter()
+        .filter(|text| parse_number(text, false).is_some())
+        .collect();
+        assert!(refused.is_empty(), "read as numbers: {refused:?}");
+    }
+
+    #[test]
+    fn parse_number_should_keep_integers_whole() {
+        assert_eq!(
+            [
+                parse_number("3", true),
+                parse_number("3.00", true),
+                parse_number("3.5", true)
+            ],
+            [Some(json!(3)), Some(json!(3)), None]
+        );
     }
 
     #[test]

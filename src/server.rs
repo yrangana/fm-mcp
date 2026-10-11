@@ -39,10 +39,11 @@ facts. Summaries can miss or distort details; check anything important.";
 
 const EXTRACT_DESCRIPTION: &str = "Extract fields from text into JSON matching a JSON Schema, \
 with the on-device model for Apple Foundation Models (free, private, offline). Good for names, \
-dates, amounts and IDs in short documents, emails or logs. Input up to about 3,500 words; pass \
-`path` to a text file instead of `text` so you don't have to read it first. Fields the text lacks usually come back as null. Flat schemas work best; nested objects are unreliable. Allowed \
-keywords: type, properties, required, items, enum, const, description, minItems, maxItems. Not \
-for code or reasoning. Values can be wrong; check what matters.";
+dates, amounts and IDs in short documents, emails, logs. Input up to about 3,500 words, as \
+`text` or `path` to a text file. Ask only for fields the text likely states: a missing one is \
+often null but may take a wrong value from nearby text. Flat schemas work best; nested ones \
+are unreliable. Allowed keywords: type, properties, required, items, enum, const, description, \
+minItems, maxItems. Not for code or reasoning; check values that matter.";
 
 const CLASSIFY_DESCRIPTION: &str = "Pick the best label for a text from a list you give, with \
 the on-device model for Apple Foundation Models (free, private, offline). Good for triage: \
@@ -226,13 +227,26 @@ impl FmMcp {
         );
         push_guidance(&mut system, &params.instructions);
         let request = ChatRequest::new(vec![ChatMessage::system(system), ChatMessage::user(text)])
-            .with_json_schema("Extraction", schema.clone())
+            .with_json_schema("Extraction", schema::for_model(&schema))
             .with_max_tokens(EXTRACT_OUTPUT_TOKENS)
             .with_timeout(STRUCTURED_TIMEOUT);
-        Ok(self
-            .structured_call(request, &schema, "extract")
-            .await
-            .map_or_else(|error| tool_error(&error), CallToolResult::structured))
+        Ok(
+            match self
+                .structured_call(request, &schema, "extract", true)
+                .await
+            {
+                Ok(answer) => {
+                    let mut result = CallToolResult::structured(answer.value);
+                    if !answer.stuck.is_empty() {
+                        result
+                            .content
+                            .push(ContentBlock::text(stuck_note(&answer.stuck)));
+                    }
+                    result
+                }
+                Err(error) => tool_error(&error),
+            },
+        )
     }
 
     #[tool(
@@ -275,9 +289,12 @@ impl FmMcp {
             .with_max_tokens(CLASSIFY_OUTPUT_TOKENS)
             .with_timeout(STRUCTURED_TIMEOUT);
         Ok(
-            match self.structured_call(request, &schema, "classify").await {
+            match self
+                .structured_call(request, &schema, "classify", false)
+                .await
+            {
                 // The model can repeat a label in a `multi` answer (seen 2026-10-08).
-                Ok(mut value) => {
+                Ok(Answer { mut value, .. }) => {
                     if let Some(chosen) = value.get_mut("labels").and_then(Value::as_array_mut) {
                         let mut seen = std::collections::HashSet::new();
                         chosen.retain(|label| seen.insert(label.clone()));
@@ -343,31 +360,17 @@ impl FmMcp {
     }
 
     /// Sends a structured-output request and checks the answer against `schema`.
-    /// The error is the tool result to return as it is.
+    /// With `rescue`, an answer cut off by the cap keeps its finished fields
+    /// (see [`schema::fill_stuck`]). The error is the tool result to return as it is.
     async fn structured_call(
         &self,
         request: ChatRequest,
         schema: &Value,
         tool: &str,
-    ) -> Result<Value, String> {
+        rescue: bool,
+    ) -> Result<Answer, String> {
         let cap = request.max_completion_tokens;
         let response = match self.backend.chat(request).await {
-            // `fm` closes the JSON when the cap cuts an answer off, so a capped
-            // answer looks valid but ends in junk: the runaway case.
-            Ok(response)
-                if cap.is_some_and(|cap| {
-                    response.usage.is_some_and(|u| u.completion_tokens >= cap)
-                }) =>
-            {
-                warn!("{tool}: structured output ran on to the length cap");
-                return Err(
-                    "The on-device model got stuck: its answer ran on to the length limit, so \
-                     fm-mcp discarded it. Usually the schema has fields the text doesn't contain, \
-                     or asks for more than about 1,000 tokens of JSON. Try once more with a \
-                     flatter schema and fewer fields; if that fails too, do this task yourself."
-                        .into(),
-                );
-            }
             Ok(response) => response,
             Err(BackendError::Timeout(secs)) => {
                 warn!("{tool}: structured output ran away; fm serve replaced");
@@ -383,23 +386,69 @@ impl FmMcp {
                 return Err(backend_error_text(&e));
             }
         };
+        // `fm` closes the JSON when the cap cuts an answer off, so a capped
+        // answer parses: the runaway case.
+        let capped =
+            cap.is_some_and(|cap| response.usage.is_some_and(|u| u.completion_tokens >= cap));
         let text = response.text().unwrap_or_default();
-        let value: Value = match serde_json::from_str(text) {
-            Ok(value) => value,
-            Err(_) => {
+        let (mut value, stuck) = match (serde_json::from_str::<Value>(text), capped) {
+            (Ok(value), false) => (value, Vec::new()),
+            (Err(_), false) => {
                 return Err(
                     "The on-device model returned invalid JSON. Try again, or do this task yourself."
                         .into(),
                 );
             }
+            (Ok(mut value), true) if rescue => match schema::fill_stuck(&mut value, schema) {
+                Some(stuck) => {
+                    warn!(
+                        "{tool}: ran on to the length cap; kept the finished fields, stuck on {stuck:?}"
+                    );
+                    (value, stuck)
+                }
+                None => return Err(stuck_error(tool)),
+            },
+            (_, true) => return Err(stuck_error(tool)),
         };
-        schema::validate(&value, schema).map(|()| value).map_err(|problem| {
-            format!(
-                "The on-device model's answer didn't match the schema ({problem}). Try again with \
-                 a simpler schema, or do this task yourself."
-            )
-        })
+        schema::read_numbers(&mut value, schema);
+        schema::validate(&value, schema)
+            .map(|()| Answer { value, stuck })
+            .map_err(|problem| {
+                format!(
+                    "The on-device model's answer didn't match the schema ({problem}). Try again \
+                     with a simpler schema, or do this task yourself."
+                )
+            })
     }
+}
+
+/// A checked structured answer, and the fields the model got stuck on (set to null).
+struct Answer {
+    value: Value,
+    stuck: Vec<String>,
+}
+
+fn stuck_error(tool: &str) -> String {
+    warn!("{tool}: structured output ran on to the length cap");
+    "The on-device model got stuck: its answer ran on to the length limit, so \
+     fm-mcp discarded it. Usually the schema has fields the text doesn't contain, \
+     or asks for more than about 1,000 tokens of JSON. Try once more with a \
+     flatter schema and fewer fields; if that fails too, do this task yourself."
+        .into()
+}
+
+/// Told to the agent with the answer: a stuck field is usually one the text
+/// lacks, but not always (the model also stuck on a receipt's total).
+fn stuck_note(stuck: &[String]) -> String {
+    let names = stuck
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Note: the on-device model got stuck on {names}, so fm-mcp set it to null. Usually the \
+         text doesn't state it, but it may: check the text if it matters."
+    )
 }
 
 #[tool_handler(router = self.tool_router)]

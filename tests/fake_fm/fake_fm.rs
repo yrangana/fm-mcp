@@ -156,9 +156,21 @@ async fn chat(body: &[u8]) -> Response<Full<Bytes>> {
     } else if schema.is_null() {
         format!("Fake summary of {} characters.", last.chars().count())
     } else if last.contains("FAKE_REPEAT") {
-        repeat_arrays(fake_instance(schema)).to_string()
+        repeat_arrays(fake_instance(schema, None)).to_string()
     } else {
-        fake_instance(schema).to_string()
+        // FAKE_AMOUNT: nullable text fields get an amount, as the real model
+        // copies one into a number field that fm-mcp asked for as text.
+        let amount = last.contains("FAKE_AMOUNT").then_some("$1,280.50");
+        let mut answer = fake_instance(schema, amount);
+        // FAKE_STUCK: the model got stuck on the last field, so the capped
+        // answer leaves it out, as the real `fm` does on a flat schema.
+        if last.contains("FAKE_STUCK")
+            && let Some(object) = answer.as_object_mut()
+            && let Some(last_field) = object.keys().next_back().cloned()
+        {
+            object.shift_remove(&last_field);
+        }
+        answer.to_string()
     };
     if request.get("stream") != Some(&Value::Bool(false)) {
         // The real server streams by default.
@@ -170,7 +182,7 @@ async fn chat(body: &[u8]) -> Response<Full<Bytes>> {
             .body(Full::new(Bytes::from(sse)))
             .unwrap();
     }
-    let completion_tokens = if last.contains("FAKE_RUN_ON") {
+    let completion_tokens = if last.contains("FAKE_RUN_ON") || last.contains("FAKE_STUCK") {
         request["max_completion_tokens"].as_u64().unwrap_or(8)
     } else {
         8
@@ -190,7 +202,7 @@ async fn chat(body: &[u8]) -> Response<Full<Bytes>> {
 /// A small value that satisfies `schema`: the first `enum` option, `null` for
 /// nullable fields (as the real model does for missing data), and simple
 /// placeholders otherwise.
-fn fake_instance(schema: &Value) -> Value {
+fn fake_instance(schema: &Value, amount: Option<&str>) -> Value {
     if let Some(first) = schema["enum"].as_array().and_then(|e| e.first()) {
         return first.clone();
     }
@@ -198,10 +210,17 @@ fn fake_instance(schema: &Value) -> Value {
         return value.clone();
     }
     if let Some(options) = schema["anyOf"].as_array() {
-        return if options.iter().any(|o| o["type"] == "null") {
+        return if let Some(amount) = amount
+            && options.iter().any(|o| o["type"] == "string")
+        {
+            Value::String(amount.to_owned())
+        } else if options.iter().any(|o| o["type"] == "null") {
             Value::Null
         } else {
-            options.first().map(fake_instance).unwrap_or(Value::Null)
+            options
+                .first()
+                .map(|o| fake_instance(o, amount))
+                .unwrap_or(Value::Null)
         };
     }
     match schema["type"].as_str() {
@@ -209,7 +228,7 @@ fn fake_instance(schema: &Value) -> Value {
             let mut object = serde_json::Map::new();
             if let Some(properties) = schema["properties"].as_object() {
                 for (name, property) in properties {
-                    object.insert(name.clone(), fake_instance(property));
+                    object.insert(name.clone(), fake_instance(property, amount));
                 }
             }
             Value::Object(object)
@@ -218,7 +237,7 @@ fn fake_instance(schema: &Value) -> Value {
             let count = schema["minItems"].as_u64().unwrap_or(1).max(1);
             Value::Array(
                 (0..count)
-                    .map(|_| fake_instance(&schema["items"]))
+                    .map(|_| fake_instance(&schema["items"], amount))
                     .collect(),
             )
         }
