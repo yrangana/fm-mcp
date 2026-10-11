@@ -13,6 +13,8 @@ Coding agents spend paid, remote tokens on simple jobs, like summarising a log o
 
 You need a Mac with **Apple Silicon** (Intel Macs are not supported), **macOS 27** with Apple Intelligence turned on, and the `fm` licence accepted once (`fm license`).
 
+No Homebrew yet? Install it from [brew.sh](https://brew.sh) first. Its installer asks to install Xcode's command line tools: accept, and let it finish.
+
 ```sh
 brew install yrangana/tap/fm-mcp
 fm-mcp install    # sets up Claude Code and Codex
