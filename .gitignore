@@ -27,3 +27,6 @@ lcov.info
 # fm-mcp test and probe leftovers
 *.sock
 *.fm-mcp-backup-*
+
+# Browser automation output (Playwright MCP)
+/.playwright-mcp/
