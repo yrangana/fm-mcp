@@ -1,6 +1,6 @@
 [package]
 name = "fm-mcp"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.88"
 description = "MCP server that lets coding agents delegate simple, private work to the on-device model for Apple Foundation Models (macOS 27)"

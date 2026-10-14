@@ -9,7 +9,7 @@
 //! - `FAKE_FM_START_DELAY_MS`: wait before listening (a slow start).
 //!
 //! Per-request behaviour comes from a magic word in the last message:
-//! `FAKE_OVERFLOW`, `FAKE_GUARDRAIL`, `FAKE_BAD_REQUEST` (error responses),
+//! `FAKE_OVERFLOW`, `FAKE_GUARDRAIL`, `FAKE_REFUSE`, `FAKE_BAD_REQUEST` (error responses),
 //! `FAKE_HANG` (never answer), `FAKE_CRASH` (exit mid-request), and
 //! `FAKE_CRASH_ONCE` (exit mid-request only the first time; needs `FAKE_FM_LOG`),
 //! `FAKE_REPEAT` (every array in a structured answer lists its items twice,
@@ -134,6 +134,9 @@ async fn chat(body: &[u8]) -> Response<Full<Bytes>> {
     }
     if last.contains("FAKE_GUARDRAIL") {
         return error(500, "The model's safety guardrails were triggered.");
+    }
+    if last.contains("FAKE_REFUSE") {
+        return error(500, "The model refused to answer.");
     }
     if last.contains("FAKE_BAD_REQUEST") {
         return error(

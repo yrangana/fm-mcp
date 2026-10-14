@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What I learned putting macOS 27's on-device model behind a coding agent</title>
+<meta name="description" content="Notes from building fm-mcp: an 8K context, logs at 1.6 characters per token, answers that run away when a field is missing, numbers the model can't reformat, and one request at a time for the whole Mac.">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://yrangana.github.io/fm-mcp/what-we-learned.html">
+<meta property="og:title" content="What I learned putting macOS 27's on-device model behind a coding agent">
+<meta property="og:description" content="An 8K context, logs at 1.6 characters per token, answers that run away when a field is missing, and numbers the model can't reformat. Measured while building fm-mcp.">
+<meta property="og:image" content="https://yrangana.github.io/fm-mcp/og-image.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://yrangana.github.io/fm-mcp/og-image.png">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg stroke='%232340c8' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath d='M12 2.5v4M20 2.5v4M12 25.5v4M20 25.5v4M2.5 12h4M2.5 20h4M25.5 12h4M25.5 20h4'/%3E%3C/g%3E%3Crect x='6' y='6' width='20' height='20' rx='4.5' fill='%232340c8'/%3E%3Ctext x='16' y='20.6' font-family='Menlo,ui-monospace,monospace' font-weight='700' font-size='11.5' text-anchor='middle' fill='%23ffffff'%3Efm%3C/text%3E%3C/svg%3E">
+<meta name="theme-color" content="#f4f1e9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121216" media="(prefers-color-scheme: dark)">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Schibsted+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<a class="skip" href="#text">Skip to the article</a>
+<div class="progress" aria-hidden="true"></div>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="mark-word" href="./"><svg class="chip" viewBox="0 0 32 32" aria-hidden="true"><path class="pins" d="M12 2.5v4M20 2.5v4M12 25.5v4M20 25.5v4M2.5 12h4M2.5 20h4M25.5 12h4M25.5 20h4"/><rect class="body" x="6" y="6" width="20" height="20" rx="4.5"/><text x="16" y="20.6" text-anchor="middle">fm</text></svg>fm-mcp</a>
+    <nav>
+      <a href="./#calls">Examples</a>
+      <a class="hide-sm" href="./#limits">Limits</a>
+      <a class="hide-sm" href="./#compare">Compare</a>
+      <a href="what-we-learned.html" aria-current="page">Notes</a>
+      <a class="gh" href="https://github.com/yrangana/fm-mcp">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="post-layout">
+<header class="post-head" id="top">
+  <div class="inner">
+    <p class="label"><b>Notes</b> · fm-mcp</p>
+    <h1>What I learned putting macOS 27's on-device model behind a coding agent</h1>
+    <p class="byline">Yasiru Rangana · 12 October 2026 · 8 min read · measured on macOS 27 and 27.0.1</p>
+  </div>
+</header>
+
+
+  <div class="post-cols">
+<article id="text">
+
+<aside class="tldr" aria-label="In short">
+<p class="tldr-h">In short</p>
+<ul>
+<li>The context is about 8,000 tokens, shared with the answer, and a log uses more than twice as many tokens per character as prose.</li>
+<li>Only <code>max_completion_tokens</code> caps the answer, and a cut answer still says <code>"stop"</code>.</li>
+<li>Asking for a field the text doesn't have can make the answer run away. An <code>anyOf</code> with <code>null</code> and a unique <code>title</code> fixed it.</li>
+<li>Ask for numbers as text and convert them yourself: the model reformats them wrongly.</li>
+<li>Name the labels in the prompt. That took <code>classify</code> from 49% to 64% on news topics.</li>
+</ul>
+</aside>
+
+
+<p>macOS 27 ships <code>fm</code>, a command-line tool for the on-device model for Apple Foundation Models. Run <code>fm serve</code> and you get the OpenAI Chat Completions API on a local socket. I built <a href="./">fm-mcp</a> on top of it, so that Claude Code and Codex can hand the model small jobs: summarising a log, pulling fields out of a document, sorting text into labels, reading a screenshot.</p>
+
+<p>Because the API looks familiar, I expected it to behave like any other model endpoint. Mostly it does. These are the places it didn't, each measured on a real Mac, and what each one changed in fm-mcp. The aim throughout was an agent that delegates only what the model gets right, since an agent that hands off too much is worse than one that hands off nothing.</p>
+
+<h2 id="context">The context is about 8,000 tokens, and the answer comes out of it<a class="anchor" href="#context" aria-label="Link to this section">#</a></h2>
+
+<p>Prompts up to 7,883 tokens worked. At about 8,200 the request failed with <em>"The session's transcript exceeded the model's context size."</em> The answer shares that budget, so the input limit is 8K minus however long you let the answer run. For <code>extract</code>, that leaves 6,518 tokens of input, which is where the "about 3,500 words" in its description comes from.</p>
+
+<h2 id="tokens">Logs cost more than twice as many tokens as prose<a class="anchor" href="#tokens" aria-label="Link to this section">#</a></h2>
+
+<p>I measured characters per token with <code>fm count-tokens</code>:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Text</th><th>Characters per token</th></tr></thead>
+<tbody>
+<tr><td>Prose</td><td>3.5</td></tr>
+<tr><td>Rust code</td><td>3.5</td></tr>
+<tr><td>Random dictionary words</td><td>4.2</td></tr>
+<tr><td>Timestamped logs with IDs and numbers</td><td>1.6</td></tr>
+</tbody></table></div>
+
+<p>So the usual "about four characters per token" guess undercounts a log by more than half. fm-mcp counts real tokens before it sends anything (<code>fm count-tokens -q</code> takes about 0.08 s). <code>summarise</code> splits text that won't fit; <code>extract</code> and <code>classify</code> refuse it with a message saying how long it was. It's also why the <code>summarise</code> description says it takes about 30,000 words of prose, but only about 1,000 lines of a dense log.</p>
+
+<h2 id="answer-cap">Only one setting limits the answer, and a cut answer looks finished<a class="anchor" href="#answer-cap" aria-label="Link to this section">#</a></h2>
+
+<p><code>fm serve</code> accepts <code>max_tokens</code> and ignores it. I asked for a 600-word essay with a cap of 30: with <code>max_tokens</code> the answers ran 587 to 699 tokens, with <code>max_completion_tokens</code> exactly 30.</p>
+
+<p>A capped answer still says <code>finish_reason: "stop"</code>, so the only sign it was cut is that <code>completion_tokens</code> equals the cap. Codex found this one for me: <code>summarise</code> overflowed the context on a 22,000-token changelog, because a part summary meant to stay under 400 tokens ran past 1,500. fm-mcp now sends <code>max_completion_tokens</code> on every request and treats an answer that used the whole cap as suspect.</p>
+
+<h2 id="runaways">Ask for a field the text doesn't have, and the answer can run away<a class="anchor" href="#runaways" aria-label="Link to this section">#</a></h2>
+
+<p>Structured output with a JSON Schema works, within limits: no <code>$ref</code>, no nullable type arrays like <code>["string", "null"]</code>, and <code>pattern</code> fails outright. The real trouble starts when you ask for a field the text doesn't contain. The model fills the string with junk until the context overflows. Three of my first four tries took about 200 seconds and ended in that overflow error. The fourth returned <code>"not available', 1, 2026-03-03, "</code>.</p>
+
+<p>Worse, <code>fm serve</code> keeps generating after the client gives up, so every request after it waits behind the runaway. Telling the model "use NOT_FOUND if missing" didn't help; it copied another field's value, or junk.</p>
+
+<p>What worked was giving every field an explicit way to be empty:</p>
+<pre><code>"total": {
+  "title": "InvoiceTotal",
+  "anyOf": [{"type": "number"}, {"type": "null"}]
+}</code></pre>
+
+<p>On an invoice with four fields present and two missing, that came back exactly right in 5 runs out of 5, about 1.4 seconds each. Two details matter. <code>anyOf</code> needs a <code>title</code> on the property, or the request is rejected. And the titles must be unique and specific: with short titles like <code>name</code> and <code>qty</code> inside array items, 6 runs of 6 ran away; with <code>ItemName</code> and <code>ItemQty</code>, 4 of 4 were right. fm-mcp rewrites every schema it's given this way before sending it.</p>
+
+<h2 id="near-misses">A missing field that sounds like something in the text takes it<a class="anchor" href="#near-misses" aria-label="Link to this section">#</a></h2>
+
+<p>With that rewrite, missing fields unrelated to the text (a tracking number, a phone number, an office address) came back <code>null</code> in 20 runs of 20. A missing field close in meaning to something that <em>is</em> in the text is different. On an invoice with no purchase order number, <code>purchase_order</code> took the line items, and <code>tax_id</code> took the supplier's name.</p>
+
+<p>Two prompt changes helped: a line saying most of the text belongs to no field, and "Null unless the text states it." at the end of every field's description. Over 30 runs each, alternating between the two versions, <code>purchase_order</code> went from <code>null</code> in 1 run to 20, and the fields that were present went from 25 runs right to 30. That's better, not fixed: on short invoices the missing PO number still took the supplier's name in 10 runs of 25. So the <code>extract</code> description tells the agent to ask only for fields the text is likely to have.</p>
+
+<h2 id="numbers">Never ask the model to reformat a number<a class="anchor" href="#numbers" aria-label="Link to this section">#</a></h2>
+
+<p>Amounts written like <code>$1,280.00</code> often came back <code>null</code> from a <code>number</code> field. The obvious fix, telling the model to leave out currency signs and commas, made things worse in a way that's harder to see. It left out the decimal point too: <code>12,450.50</code> came back as <code>1245050</code> in 7 runs of 8. Other wordings turned <code>126.45</code> into <code>12645</code> and <code>USD 3,000</code> into <code>3</code>. A <code>null</code> at least admits it doesn't know; those are confident wrong numbers.</p>
+
+<p>Asked for the same amount as a string, the model copied it exactly every time it finished an answer, 46 times out of 46. So since 0.1.1, fm-mcp asks the model for number fields as text and converts them itself. It accepts one plain amount (a currency code or sign, digits with thousands commas, decimals) and turns anything else into <code>null</code>.</p>
+
+<h2 id="rescue">When a flat answer runs away, the rest of it is usually fine<a class="anchor" href="#rescue" aria-label="Link to this section">#</a></h2>
+
+<p>Capping the answer turns a 200-second runaway into a fast failure, but fm-mcp was still throwing the whole answer away. Looking at the raw capped answers showed why that was wasteful: on a flat schema, the field the model got stuck on is simply missing, and every other field is complete. That held in all 12 capped answers I checked. So 0.1.1 keeps the finished fields, sets the stuck one to <code>null</code>, and adds a note naming it. The note matters, because now and then the stuck field is one the text does contain, such as a receipt's total.</p>
+
+<p>On invoices with two fields the text lacked, "got stuck" errors went from 13 calls in 25 to none. A rescued call still takes about 15 seconds, the time it takes to hit the cap.</p>
+
+<h2 id="labels">A list of choices in the schema isn't a list the model can see<a class="anchor" href="#labels" aria-label="Link to this section">#</a></h2>
+
+<p><code>classify</code> asks for <code>{"label": …}</code> with the labels as an <code>enum</code> in the JSON Schema, which guarantees the answer is one of them. I assumed that also told the model what the choices were. It doesn't seem to. On 200 news articles from the AG News dataset, with four topics, it got 49% right and almost never picked "Science and technology". On 204 sentences labelled with six emotions, it got 29%, with a strong pull towards "anger".</p>
+
+<p>One sentence in the prompt, "The labels are: …", took those to 64% and 58%. That fix is in fm-mcp 0.1.2. It's still a small model: fine for sorting support tickets into clear categories, weak at telling joy from love, and no substitute for a classifier trained on your data. News articles also drew a refusal I hadn't seen before, "The model refused to answer.", about one time in six.</p>
+
+<h2 id="ocr">Plain vision reads text better than the OCR tool<a class="anchor" href="#ocr" aria-label="Link to this section">#</a></h2>
+
+<p><code>fm</code> has a dedicated OCR mode, <code>fm respond --tool ocr</code>. Sending the image to <code>fm serve</code> as an ordinary vision request, with the prompt "Return all the text in this image exactly as written, line by line", did better on my five test images: a screenshot, small text, two columns, a receipt, and handwriting-style text.</p>
+<div class="table-wrap"><table>
+<thead><tr><th></th><th>Known phrases found</th><th>Per image</th></tr></thead>
+<tbody>
+<tr><td>Vision through <code>fm serve</code></td><td>30 of 30</td><td>about 1.8 s</td></tr>
+<tr><td><code>fm respond --tool ocr</code></td><td>28 of 30</td><td>about 3.3 s</td></tr>
+</tbody></table></div>
+<p>The OCR mode garbled small text, separated receipt prices from their items, and sometimes started with "Here is the text…". Vision kept the layout (<code>Flat white 4.80</code>) and added nothing. PNG, JPEG, HEIC, TIFF, GIF and BMP all worked. PDF isn't supported.</p>
+
+<h2 id="one-at-a-time">One request at a time, for the whole Mac<a class="anchor" href="#one-at-a-time" aria-label="Link to this section">#</a></h2>
+
+<p>Three requests sent at once to one <code>fm serve</code> finished at 5.6, 8.2 and 11.0 seconds. Three separate <code>fm serve</code> processes, which is what three agent sessions would start, queued the same way: each extra request added about 2.6 seconds, whichever process sent it. Nothing failed; requests just wait. More servers add no throughput, so the tool descriptions tell the agent that calls queue, and that a long summary takes a minute or more.</p>
+
+<h2 id="smaller-things">Smaller things<a class="anchor" href="#smaller-things" aria-label="Link to this section">#</a></h2>
+<ul>
+<li><strong>No log probabilities.</strong> <code>logprobs: true</code> returns HTTP 200 and no <code>logprobs</code> field, so there's no way to get a confidence score. <code>classify</code> instead constrains the answer to the given labels with an <code>enum</code>: on 20 support messages with 4 labels, all 20 answers were valid labels and 18 were the expected one.</li>
+<li><strong>Don't trust the error type.</strong> The safety filter sometimes refuses harmless text. And input far over the limit (about 14,000 tokens) came back as a safety error rather than a context error, which is another reason to count tokens first.</li>
+<li><strong>Long socket paths fail silently.</strong> Past macOS's 104-byte limit, <code>fm serve</code> keeps running, prints nothing and never creates the socket. fm-mcp checks the length, and <code>fm-mcp doctor</code> reports it.</li>
+</ul>
+
+<h2 id="delegation">What this means for delegation<a class="anchor" href="#delegation" aria-label="Link to this section">#</a></h2>
+
+<p>A small model is useful to a coding agent only if the agent knows where its edges are. That's why fm-mcp has no general "ask" tool, only four narrow ones; why each tool description states its limits in plain words; and why <code>fm-mcp install</code> adds a short guide telling the agent when to delegate and when to keep the work. Most of what's above ended up as a sentence in one of those descriptions.</p>
+
+<p>If you have a Mac with macOS 27 and Apple Intelligence on:</p>
+<pre><code>brew install yrangana/tap/fm-mcp
+fm-mcp install
+fm-mcp doctor</code></pre>
+
+<p class="method">How I measured: on one Apple Silicon Mac running macOS 27 and 27.0.1, between 6 and 11 October 2026, sending requests straight to <code>fm serve</code> or through fm-mcp. Run counts are small, usually 4 to 50 per variant, and the model varies a lot from run to run, so I alternated between variants rather than running one batch after another. Every number here is recorded, with its date, in the project's <a href="https://github.com/yrangana/fm-mcp/blob/main/AGENTS.md">AGENTS.md</a>.</p>
+
+<div class="post-end">
+  <p class="label">Try it</p>
+  <div class="post-end-row">
+    <a class="btn btn-primary" href="https://github.com/yrangana/fm-mcp#install">Install guide</a>
+    <a class="btn" href="./">fm-mcp home</a>
+    <a href="#top">Back to top ↑</a>
+  </div>
+</div>
+
+</article>
+  <nav class="toc" aria-label="Contents">
+    <details class="toc-box" open>
+      <summary>Contents <span>12 sections</span></summary>
+      <ol>
+      <li><a href="#context">The 8K context</a></li>
+      <li><a href="#tokens">Logs and tokens</a></li>
+      <li><a href="#answer-cap">Capping the answer</a></li>
+      <li><a href="#runaways">Runaway answers</a></li>
+      <li><a href="#near-misses">Near-miss fields</a></li>
+      <li><a href="#numbers">Numbers</a></li>
+      <li><a href="#rescue">Rescuing a stuck answer</a></li>
+      <li><a href="#labels">Labels the model can’t see</a></li>
+      <li><a href="#ocr">OCR vs plain vision</a></li>
+      <li><a href="#one-at-a-time">One request at a time</a></li>
+      <li><a href="#smaller-things">Smaller things</a></li>
+      <li><a href="#delegation">What it means for delegation</a></li>
+      </ol>
+    </details>
+  </nav>
+  </div>
+</div>
+
+
+<footer>
+  <div class="wrap">
+    <p>Made by <a href="https://yasirurangana.com">Yasiru Rangana</a>. MIT licence. <a href="./">Home</a> · <a href="what-we-learned.html">Notes</a> · <a href="https://github.com/yrangana/fm-mcp">GitHub</a> · <a href="https://github.com/yrangana/fm-mcp/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/yrangana/fm-mcp/blob/main/docs/TOOLS.md">Tools</a> · <a href="https://github.com/yrangana/fm-mcp/blob/main/SECURITY.md">Security</a></p>
+    <p>fm-mcp is not affiliated with or endorsed by Apple. It calls the <code>fm</code> tool installed on your Mac and includes nothing from Apple.</p>
+  </div>
+</footer>
+
+<script>
+// Reading progress, and the current section in the contents list.
+var bar = document.querySelector('.progress');
+var box = document.querySelector('.toc-box');
+var links = Array.prototype.slice.call(document.querySelectorAll('.toc a'));
+var heads = links.map(function (a) { return document.getElementById(a.getAttribute('href').slice(1)); });
+var narrow = window.matchMedia('(max-width: 1099px)');
+if (narrow.matches) box.open = false;
+function onScroll() {
+  var h = document.documentElement, max = h.scrollHeight - h.clientHeight;
+  bar.style.width = (max > 0 ? (h.scrollTop / max) * 100 : 0) + '%';
+  var cur = -1;
+  heads.forEach(function (el, i) { if (el.getBoundingClientRect().top < 140) cur = i; });
+  links.forEach(function (a, i) {
+    a.classList.toggle('on', i === cur);
+    if (i === cur) a.setAttribute('aria-current', 'location'); else a.removeAttribute('aria-current');
+  });
+}
+document.addEventListener('scroll', onScroll, { passive: true });
+onScroll();
+links.forEach(function (a) {
+  a.addEventListener('click', function () { if (narrow.matches) box.open = false; });
+});
+</script>
+</body>
+</html>

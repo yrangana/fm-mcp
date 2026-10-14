@@ -1,0 +1,66 @@
+2026-10-09T09:00:06Z INFO  boot     checkout-service 4.2.1 starting, region ap-southeast-2
+2026-10-09T09:00:09Z WARN  config   STRIPE_WEBHOOK_SECRET not set; webhook signatures will not be verified
+2026-10-09T09:00:13Z DEBUG cache    hit ratio 0.974
+2026-10-09T09:00:23Z INFO  http     POST /api/cart/items 201 80ms
+2026-10-09T09:00:29Z DEBUG cache    hit ratio 0.983
+2026-10-09T09:00:42Z INFO  http     POST /api/cart/items 201 63ms
+2026-10-09T09:00:58Z INFO  http     POST /api/cart/items 201 84ms
+2026-10-09T09:01:12Z DEBUG cache    hit ratio 0.989
+2026-10-09T09:01:35Z INFO  worker   email.queue drained, 56 sent
+2026-10-09T09:01:50Z INFO  http     GET /api/products/73 200 12ms
+2026-10-09T09:02:07Z DEBUG cache    hit ratio 0.931
+2026-10-09T09:02:20Z INFO  http     GET /api/cart 200 83ms
+2026-10-09T09:02:36Z INFO  worker   email.queue drained, 21 sent
+2026-10-09T09:02:53Z INFO  http     GET /api/products/46 200 12ms
+2026-10-09T09:03:07Z DEBUG cache    hit ratio 0.973
+2026-10-09T09:03:14Z ERROR payment  POST https://api.payments.example/v1/charges timed out after 10000ms (order 51820)
+2026-10-09T09:03:23Z INFO  worker   email.queue drained, 31 sent
+2026-10-09T09:03:31Z ERROR payment  POST https://api.payments.example/v1/charges timed out after 10000ms (order 51821)
+2026-10-09T09:03:52Z ERROR payment  POST https://api.payments.example/v1/charges timed out after 10000ms (order 51822)
+2026-10-09T09:03:58Z INFO  worker   email.queue drained, 97 sent
+2026-10-09T09:04:04Z ERROR payment  POST https://api.payments.example/v1/charges timed out after 10000ms (order 51823)
+2026-10-09T09:04:08Z INFO  http     POST /api/cart/items 201 72ms
+2026-10-09T09:04:11Z ERROR payment  POST https://api.payments.example/v1/charges timed out after 10000ms (order 51824)
+2026-10-09T09:04:29Z ERROR payment  POST https://api.payments.example/v1/charges timed out after 10000ms (order 51825)
+2026-10-09T09:04:35Z DEBUG cache    hit ratio 0.926
+2026-10-09T09:04:45Z WARN  payment  retry budget exhausted; 6 orders left in PENDING
+2026-10-09T09:04:54Z INFO  worker   email.queue drained, 71 sent
+2026-10-09T09:05:01Z INFO  http     POST /api/cart/items 201 53ms
+2026-10-09T09:05:11Z INFO  http     GET /api/cart 200 88ms
+2026-10-09T09:05:26Z INFO  http     GET /api/products/87 200 12ms
+2026-10-09T09:05:50Z INFO  worker   email.queue drained, 49 sent
+2026-10-09T09:06:07Z INFO  http     POST /api/cart/items 201 12ms
+2026-10-09T09:06:30Z DEBUG cache    hit ratio 0.992
+2026-10-09T09:06:47Z INFO  http     POST /api/cart/items 201 79ms
+2026-10-09T09:07:01Z INFO  worker   email.queue drained, 35 sent
+2026-10-09T09:07:15Z INFO  worker   email.queue drained, 34 sent
+2026-10-09T09:07:27Z ERROR db       connection pool exhausted (max 20, waiting 31); request /api/checkout failed
+2026-10-09T09:07:33Z INFO  http     GET /api/cart 200 70ms
+2026-10-09T09:07:47Z ERROR db       connection pool exhausted (max 20, waiting 31); request /api/checkout failed
+2026-10-09T09:07:50Z INFO  http     GET /api/products/94 200 12ms
+2026-10-09T09:08:05Z ERROR db       connection pool exhausted (max 20, waiting 31); request /api/checkout failed
+2026-10-09T09:08:14Z INFO  http     GET /api/products/60 200 12ms
+2026-10-09T09:08:24Z ERROR db       connection pool exhausted (max 20, waiting 31); request /api/checkout failed
+2026-10-09T09:08:35Z INFO  http     POST /api/cart/items 201 93ms
+2026-10-09T09:08:49Z INFO  db       pool resized to 40 by autoscaler
+2026-10-09T09:08:59Z INFO  http     POST /api/cart/items 201 11ms
+2026-10-09T09:09:17Z INFO  http     GET /api/cart 200 37ms
+2026-10-09T09:09:39Z DEBUG cache    hit ratio 0.926
+2026-10-09T09:09:57Z DEBUG cache    hit ratio 0.978
+2026-10-09T09:10:15Z DEBUG cache    hit ratio 0.929
+2026-10-09T09:10:26Z INFO  http     GET /api/cart 200 97ms
+2026-10-09T09:10:41Z INFO  http     GET /api/cart 200 34ms
+2026-10-09T09:10:52Z INFO  http     GET /api/cart 200 66ms
+2026-10-09T09:11:13Z INFO  http     GET /api/products/75 200 12ms
+2026-10-09T09:11:34Z DEBUG cache    hit ratio 0.967
+2026-10-09T09:11:53Z INFO  http     GET /api/cart 200 64ms
+2026-10-09T09:12:02Z INFO  http     GET /api/products/42 200 12ms
+2026-10-09T09:12:05Z ERROR inventory  SKU 88-1043 stock went negative (-2) after concurrent checkout
+2026-10-09T09:12:20Z INFO  http     POST /api/cart/items 201 65ms
+2026-10-09T09:12:33Z INFO  http     GET /api/products/56 200 12ms
+2026-10-09T09:12:53Z INFO  worker   email.queue drained, 76 sent
+2026-10-09T09:13:02Z INFO  http     GET /api/cart 200 43ms
+2026-10-09T09:13:13Z INFO  http     GET /api/products/29 200 12ms
+2026-10-09T09:13:29Z INFO  http     GET /api/products/98 200 12ms
+2026-10-09T09:13:42Z INFO  http     GET /api/cart 200 20ms
+2026-10-09T09:13:54Z INFO  http     GET /api/cart 200 80ms

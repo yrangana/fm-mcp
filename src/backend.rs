@@ -169,6 +169,8 @@ pub enum BackendError {
     ContextOverflow,
     #[error("the model's safety guardrails were triggered")]
     Guardrail,
+    #[error("the model refused to answer")]
+    Refused,
     #[error("model server returned HTTP {status}: {message}")]
     Http { status: u16, message: String },
     #[error("the model server reports the model is not available")]
@@ -207,6 +209,9 @@ impl BackendError {
             Self::ContextOverflow
         } else if message.contains("safety guardrails were triggered") {
             Self::Guardrail
+        } else if message.contains("The model refused to answer") {
+            // HTTP 500, seen on 36 of 200 news articles with `classify` (2026-10-12).
+            Self::Refused
         } else {
             Self::Http { status, message }
         }
@@ -247,6 +252,15 @@ mod tests {
         assert!(matches!(
             BackendError::from_http(500, body),
             BackendError::ContextOverflow
+        ));
+    }
+
+    #[test]
+    fn from_http_should_detect_a_refusal() {
+        let body = br#"{"error":{"code":"500","message":"The model refused to answer.","type":"server_error"}}"#;
+        assert!(matches!(
+            BackendError::from_http(500, body),
+            BackendError::Refused
         ));
     }
 

@@ -6,7 +6,7 @@ Guidance for coding agents (Claude Code, Codex) working in this repository.
 
 **fm-mcp** — an MCP server that lets coding agents hand cheap, private, simple work to Apple's on-device Foundation Model (the `fm` that ships with macOS 27). Free, offline, one-command install.
 
-**Status:** v0.1.0 released 2026-10-11. Current state: `plans/STATUS.md`; the v1 plan is `plans/shipped/FM_MCP_V1.md`.
+**Status:** v0.1.1 released 2026-10-12. Current state: `plans/STATUS.md`; the v1 plan is `plans/shipped/FM_MCP_V1.md`, the launch plan `plans/active/FM_MCP_LAUNCH.md`.
 
 ## The goal
 
@@ -68,6 +68,9 @@ Probed on macOS 27, 2026-10-06; re-checked on macOS 27.0.1 (26A434), 2026-10-06.
   - `summarise` on a 30,288-token log took 86.9 s: 5 parts, then combined, with 6 progress updates. A second run with different prompts took 130 s. The summary kept 2 of 3 planted incidents exactly; the third was lost when summarising its part (see plan R12).
   - `extract`: 1.2 s for 3 fields and 2.0 s with an array of line items. A field missing from the text came back as `null` with the nullable rewrite, with no runaway.
   - `classify`: 0.5 s per call. Over 20 varied support messages with 4 labels, 20 of 20 answers were valid labels and 18 of 20 were the expected label.
+- **`classify` must name the labels in the prompt; the `enum` alone doesn't show the model its choices** *(2026-10-12)*. On public datasets through fm-mcp, labels only in the schema `enum` (0.1.1): AG News (4 news topics, 200 test articles) 98 right (49%), and "Science and technology" was almost never chosen; dair-ai/emotion (6 labels, 204 sentences) 59 right (29%), with a strong pull to `anger`. With " The labels are: a, b, c." added to the system prompt, interleaved on 40 texts each: AG News 17 → 29, emotion 15 → 27. Full runs with the fix: AG News 128/200 (64%; 79% of the answers given), emotion 118/204 (58%). Median 0.5 s per call. So `classify` is fine for triage into clear-cut labels, weak on fine-grained ones (emotions), and not a substitute for a trained classifier.
+- **HTTP 500 "The model refused to answer."** is a second kind of refusal, separate from the guardrail message *(2026-10-12)*. It came back for 34–36 of 200 AG News articles (about 1 in 6) and 1–2 of 204 emotion sentences. fm-mcp reports it like a guardrail refusal: the agent does the task itself.
+- **`summarise` as bullets on a log with repeated lines spends its bullets on the repeats** *(2026-10-12)*. On a 66-line, 2.6K-token log with three problems (six near-identical payment timeouts, a DB pool error, a stock error), `focus: "what went wrong"`: as one paragraph, all three problems in 3 of 3 runs (about 5.5 s; one run dropped one order number); as bullets, 2 of 3 runs used all 7 bullets on the timeout lines and missed the other two problems. On the same log at 6.4K tokens, the paragraph run listed an order number that isn't in the log (51826), and the default (no focus) returned raw log lines. Not fixed yet.
   - `ocr`: about 2.1 s per image. 30 of 30 known phrases across the 5 test images.
 - **Token density varies a lot by text type** *(measured 2026-10-07)*. Characters per token: prose (AGENTS.md) 3.5, Rust code 3.5, random dictionary words 4.2, timestamped logs with IDs and numbers **1.6**. A fixed characters-per-token estimate undercounts logs by more than half, so always count real tokens. `fm count-tokens -q` over stdin takes about 0.08 s (1.3 s on the first, cold call). Empty input fails with *"Missing prompt."*, so never send empty text.
   - **Words per token in prose, for the limits the tools quote** *(measured 2026-10-07 on repeated README text)*: 3,640 words = 5,840 tokens; 4,095 words = 6,570; 5,005 words = 8,030. So about 1.6 tokens per word. The `extract` input budget is 6,518 tokens and `classify` 7,318, which is why both tools say "about 3,500 words"; 5,000 words is refused as too long. The `summarise` cap of 48,000 tokens is about 30,000 words.
@@ -116,7 +119,7 @@ Checked 2026-10-08 with Claude Code 2.1.293, in a scratch `HOME`.
 
 - **Run tests with `cargo test --features fake-fm`.** The feature builds `fake-fm` (`tests/fake_fm/fake_fm.rs`), a fake `fm serve` the integration tests use, so they need no Apple Intelligence. Plain `cargo test` fails on purpose with that instruction.
 - **Lint:** `cargo clippy --all-targets --all-features -- -D warnings` and `cargo fmt --check`. CI (`.github/workflows/ci.yml`) runs all three on macOS arm64.
-- **The fake is driven by** environment variables (`FAKE_FM_AVAILABLE`, `FAKE_FM_LICENSE`, `FAKE_FM_START_DELAY_MS`, `FAKE_FM_LOG`) and magic words in the prompt (`FAKE_OVERFLOW`, `FAKE_GUARDRAIL`, `FAKE_BAD_REQUEST`, `FAKE_HANG`, `FAKE_CRASH`, `FAKE_CRASH_ONCE`, `FAKE_REPEAT`, `FAKE_RUN_ON`, `FAKE_STUCK`, `FAKE_AMOUNT`). When `fm` shows new behaviour, record it in the verified facts above and teach the fake.
+- **The fake is driven by** environment variables (`FAKE_FM_AVAILABLE`, `FAKE_FM_LICENSE`, `FAKE_FM_START_DELAY_MS`, `FAKE_FM_LOG`) and magic words in the prompt (`FAKE_OVERFLOW`, `FAKE_GUARDRAIL`, `FAKE_REFUSE`, `FAKE_BAD_REQUEST`, `FAKE_HANG`, `FAKE_CRASH`, `FAKE_CRASH_ONCE`, `FAKE_REPEAT`, `FAKE_RUN_ON`, `FAKE_STUCK`, `FAKE_AMOUNT`). When `fm` shows new behaviour, record it in the verified facts above and teach the fake.
 - **Settings:** `FM_MCP_FM_PATH` (default `/usr/bin/fm`), `FM_MCP_REQUEST_TIMEOUT_SECS` (default 120), `FM_MCP_LOG` (log filter, default `info,rmcp=warn`). Logs go to stderr only; stdout is the MCP protocol.
 - **`install` and `doctor`** (`src/install/`, `src/doctor.rs`) are tested in `tests/install.rs` against a scratch `HOME` with `PATH` limited to `/usr/bin:/bin`, so the real `claude` and your real config are never touched. A fake `claude` script stands in when a test needs one. To try them by hand, set `HOME` to a scratch folder too, or use `--dry-run`.
 - **Delegation guidance** lives in `skills/fm-delegate/SKILL.md` (Claude Code skill) and `snippets/AGENTS.md.snippet` (Codex). Both are embedded in the binary by `src/guidance.rs`. Change them only after testing decisions with sub-agents before and after (see the plan's Phase 4 notes), and keep their size limits in step with the `summarise` description.
@@ -128,6 +131,7 @@ Checked 2026-10-08 with Claude Code 2.1.293, in a scratch `HOME`.
 - Also: `curl | sh` installer and `cargo install`.
 - Releases built with **`cargo-dist`** on a GitHub Actions macOS arm64 runner.
 - Publish to the **MCP Registry** (`server.json`, `mcp-publisher`) and the **Claude plugin marketplace** (plugin = MCP config + delegation skill).
+- **Site:** `web/` (static HTML, no build) is published to GitHub Pages (yrangana.github.io/fm-mcp) by `.github/workflows/deploy-site.yml` on pushes to `main` that touch `web/`. Every claim on it must match the README or the verified facts above; update it when they change.
 - CI cannot run Apple Intelligence — test against a fake `fm serve`; do a manual pass on a real Mac before each release.
 
 ## Open decisions

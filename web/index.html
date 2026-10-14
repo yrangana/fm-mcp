@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fm-mcp: hand small jobs to the model on your Mac</title>
+<meta name="description" content="An MCP server that lets Claude Code and Codex hand simple text work to the on-device model for Apple Foundation Models. Free, private, offline. One Rust binary, one command to set up.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://yrangana.github.io/fm-mcp/">
+<meta property="og:title" content="fm-mcp: hand small jobs to the model on your Mac">
+<meta property="og:description" content="Claude Code and Codex hand summarising, extraction, classification and OCR to the on-device model. Free, private, offline. brew install, then one command.">
+<meta property="og:image" content="https://yrangana.github.io/fm-mcp/og-image.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="fm-mcp: hand small jobs to the model on your Mac">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://yrangana.github.io/fm-mcp/og-image.png">
+<meta name="theme-color" content="#f4f1e9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#121216" media="(prefers-color-scheme: dark)">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cg stroke='%232340c8' stroke-width='2.6' stroke-linecap='round'%3E%3Cpath d='M12 2.5v4M20 2.5v4M12 25.5v4M20 25.5v4M2.5 12h4M2.5 20h4M25.5 12h4M25.5 20h4'/%3E%3C/g%3E%3Crect x='6' y='6' width='20' height='20' rx='4.5' fill='%232340c8'/%3E%3Ctext x='16' y='20.6' font-family='Menlo,ui-monospace,monospace' font-weight='700' font-size='11.5' text-anchor='middle' fill='%23ffffff'%3Efm%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Schibsted+Grotesk:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<a class="skip" href="#why">Skip to content</a>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="mark-word" href="#top"><svg class="chip" viewBox="0 0 32 32" aria-hidden="true"><path class="pins" d="M12 2.5v4M20 2.5v4M12 25.5v4M20 25.5v4M2.5 12h4M2.5 20h4M25.5 12h4M25.5 20h4"/><rect class="body" x="6" y="6" width="20" height="20" rx="4.5"/><text x="16" y="20.6" text-anchor="middle">fm</text></svg>fm-mcp</a>
+    <nav>
+      <a href="#calls">Examples</a>
+      <a class="hide-sm" href="#limits">Limits</a>
+      <a class="hide-sm" href="#compare">Compare</a>
+      <a href="what-we-learned.html">Notes</a>
+      <a class="gh" href="https://github.com/yrangana/fm-mcp">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero" id="top">
+  <div class="wrap">
+    <div>
+      <p class="label"><b>MCP server</b> · macOS 27 · v0.1.2, public beta</p>
+      <h1>Hand small jobs to <em>the model on your Mac</em>.</h1>
+      <p class="lede">fm-mcp lets Claude Code and Codex use the small model built into macOS 27 for the gist of a log, fields from an invoice, or the text in a screenshot. Free, private and offline.</p>
+
+      <div class="term" aria-label="Install commands">
+        <div class="term-bar"><span class="dots"><i></i><i></i><i></i></span><span class="t">Terminal</span><button class="copy" data-copy="brew install yrangana/tap/fm-mcp&#10;fm-mcp install&#10;fm-mcp doctor">Copy</button></div>
+<pre><span class="p">$ </span>brew install yrangana/tap/fm-mcp
+<span class="p">$ </span>fm-mcp install    <span class="c"># sets up Claude Code and Codex</span>
+<span class="p">$ </span>fm-mcp doctor     <span class="c"># checks everything it needs</span></pre>
+      </div>
+
+      <div class="actions">
+        <a class="btn btn-primary" href="https://github.com/yrangana/fm-mcp#install">Install guide</a>
+        <a class="btn" href="#calls">See real calls</a>
+        <a href="what-we-learned.html">What I learned building it →</a>
+      </div>
+    </div>
+
+    <figure>
+      <div class="term">
+        <div class="term-bar"><span class="dots"><i></i><i></i><i></i></span><span class="t">claude · what went wrong in checkout.log?</span><button class="zoom" type="button" aria-label="Enlarge the recording">Enlarge</button></div>
+        <div class="player" data-gif="delegate.gif" data-ms="36400">
+          <img src="delegate-poster.png" width="1200" height="720" alt="A terminal recording of Claude Code asked what went wrong in checkout.log. It loads the fm-delegate skill, calls fm-mcp, checks the summary against the log, and answers with three problems: payment timeouts leaving six orders in PENDING, a full database connection pool, and stock for SKU 88-1043 going negative.">
+          <button class="play" type="button"><span class="tri" aria-hidden="true"></span>Play the recording · 36 s</button>
+        </div>
+      </div>
+      <figcaption>Real time. Claude Code hands the log to the on-device model, checks the draft, and fixes three details it got wrong.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="facts" aria-label="Measured on a Mac with macOS 27">
+  <div class="wrap">
+    <div class="fact"><div class="n">8K<small>tokens</small></div><p>context, for input and answer together</p></div>
+    <div class="fact"><div class="n">0.5<small>s</small></div><p>median <code>classify</code> call, over 404 texts</p></div>
+    <div class="fact"><div class="n">1.4<small>s</small></div><p>to pull 4 fields from an invoice</p></div>
+    <div class="fact"><div class="n">$0</div><p>per call, and it works offline</p></div>
+  </div>
+</section>
+
+<section class="sec" id="why">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-no">01</span>
+      <h2>The model is small, so the agent has to know what not to send it.</h2>
+      <p>Each tool description says what the model gets wrong, with numbers, and <code>fm-mcp install</code> gives each agent a short guide on when to delegate.</p>
+    </div>
+    <div class="sec-body points">
+      <div class="point">
+        <span class="k">brew</span>
+        <h3>One binary</h3>
+        <p>Rust, installed with Homebrew. No Python, no cloning. It starts <code>fm serve</code> when needed and stops it after.</p>
+      </div>
+      <div class="point">
+        <span class="k">fm-mcp install · doctor</span>
+        <h3>Sets itself up</h3>
+        <p><code>install</code> writes the Claude Code and Codex config, with backups; <code>--uninstall</code> removes it. <code>doctor</code> checks everything.</p>
+      </div>
+      <div class="point">
+        <span class="k">skill · AGENTS.md</span>
+        <h3>Says what it can't do</h3>
+        <p>Four narrow tools and no open-ended "ask". Each description states its limits.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="calls">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-no">02</span>
+      <h2>Three real calls</h2>
+      <p>What the agent sent and what came back, from fm-mcp 0.1.1 on 12 October 2026.</p>
+    </div>
+    <div class="sec-body">
+
+      <div class="call">
+        <div>
+          <h3>Summarise a log</h3>
+          <p class="meta">summarise · 5.3 s</p>
+          <p>A 66-line checkout log (<a href="https://github.com/yrangana/fm-mcp/blob/main/docs/demo/checkout.log">the file</a>). All three problems in 3 of 3 runs, but every run dropped a warning about an unset webhook secret. Check what matters.</p>
+        </div>
+        <div class="term">
+          <div class="term-bar"><span class="dots"><i></i><i></i><i></i></span><span class="t">summarise</span></div>
+<pre><span class="in">→ {"path": "docs/demo/checkout.log", "focus": "what went wrong"}</span>
+
+The payment service timed out multiple times after 10000ms for orders
+51820, 51821, 51822, 51823, 51824, and 51825, with the retry budget
+exhausted for 6 orders left in PENDING. The database connection pool
+exhausted (max 20, waiting 31) for requests to /api/checkout, occurring
+multiple times. The inventory system reported that SKU 88-1043 stock
+went negative (-2) after concurrent checkout.</pre>
+        </div>
+      </div>
+
+      <div class="call">
+        <div>
+          <h3>Pull fields out of an invoice</h3>
+          <p class="meta">extract · 1.4 s</p>
+          <p>The model copies <code>$1,280.00</code> as text and fm-mcp converts it. Asked to reformat numbers itself, the model got them wrong.</p>
+        </div>
+        <div class="term">
+          <div class="term-bar"><span class="dots"><i></i><i></i><i></i></span><span class="t">extract</span></div>
+<pre><span class="in">→ text:   "Invoice INV-2041 from Northwind Traders, dated 3 March 2026.
+           Total due: $1,280.00 by 2 April 2026."
+  schema: invoice_number, supplier, total (number), due_date</span>
+
+{"invoice_number": "INV-2041", "supplier": "Northwind Traders",
+ "total": 1280.0, "due_date": "2 April 2026"}</pre>
+        </div>
+      </div>
+
+      <div class="call">
+        <div>
+          <h3>Sort a message into your labels</h3>
+          <p class="meta">classify · 0.6 s</p>
+          <p>The answer is always one of your labels. The fourth tool, <code>ocr</code>, reads an image in about 2 s.</p>
+        </div>
+        <div class="term">
+          <div class="term-bar"><span class="dots"><i></i><i></i><i></i></span><span class="t">classify</span></div>
+<pre><span class="in">→ text:   "I was charged twice for my subscription this month."
+  labels: billing, bug, feature request, account access</span>
+
+{"label": "billing"}</pre>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="tools">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-no">03</span>
+      <h2>Four narrow tools</h2>
+      <p><code>summarise</code>, <code>extract</code> and <code>classify</code> take <code>text</code> or a file <code>path</code>. Full reference: <a href="https://github.com/yrangana/fm-mcp/blob/main/docs/TOOLS.md">docs/TOOLS.md</a>.</p>
+    </div>
+    <div class="sec-body">
+      <div class="tools">
+        <div class="tool">
+          <h3>summarise</h3>
+          <p>The gist of a log, document or transcript: a paragraph, or up to 7 bullets.</p>
+          <p class="takes"><b>Takes</b>About 30,000 words of prose, or 1,000 lines of a dense log. Long input is split, which is slower and can drop details.</p>
+        </div>
+        <div class="tool">
+          <h3>extract</h3>
+          <p>Named fields from one text as JSON, from your JSON Schema. Best with a flat schema.</p>
+          <p class="takes"><b>Takes</b>About 3,500 words.</p>
+        </div>
+        <div class="tool">
+          <h3>classify</h3>
+          <p>Sorts one text into your labels: one, or several with <code>multi</code>.</p>
+          <p class="takes"><b>Takes</b>About 3,500 words.</p>
+        </div>
+        <div class="tool">
+          <h3>ocr</h3>
+          <p>Text from a PNG, JPEG, HEIC, TIFF, GIF or BMP image. Not PDF.</p>
+          <p class="takes"><b>Takes</b>One image.</p>
+        </div>
+      </div>
+
+      <div class="split">
+        <div class="yes">
+          <h3>Good to hand off</h3>
+          <ul>
+            <li>The gist of a long log or transcript</li>
+            <li>Names, dates, amounts and IDs from a short document</li>
+            <li>Sorting tickets, emails or log lines</li>
+            <li>Text in a screenshot or a receipt photo</li>
+          </ul>
+        </div>
+        <div class="no">
+          <h3>Better kept by the agent</h3>
+          <ul>
+            <li>Code, maths or reasoning</li>
+            <li>Facts the text doesn't contain</li>
+            <li>Anything costly to get wrong that can't be checked</li>
+            <li>A page the agent has already read: nothing to save</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="limits">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-no">04</span>
+      <h2>Where it falls short</h2>
+      <p>The tool descriptions say the same. <a href="what-we-learned.html">The notes</a> show how each was measured.</p>
+    </div>
+    <div class="sec-body">
+      <ol class="limits">
+        <li><div><strong>Small context.</strong> About 8,000 tokens for input and answer together, and logs use more than twice as many tokens per character as prose.</div></li>
+        <li><div><strong>It makes mistakes.</strong> Summaries can drop details. <code>extract</code> can fill a missing field from nearby text: a missing PO number took the supplier's name in 10 of 25 runs. Ask only for fields the text is likely to have.</div></li>
+        <li><div><strong>One request at a time.</strong> All sessions share the model, so calls queue. A short <code>extract</code> takes 1–2 s; a long <code>summarise</code>, a minute or more.</div></li>
+        <li><div><strong>Refusals.</strong> The model sometimes refuses harmless text. fm-mcp says so, and the agent does the job itself.</div></li>
+        <li><div><strong>Mac only.</strong> Apple Silicon and macOS 27 with Apple Intelligence on. No Intel, Windows or Linux.</div></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="setup">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-no">05</span>
+      <h2>Set up in about 20 seconds</h2>
+      <p>Apple Silicon, macOS 27, Apple Intelligence on, and the <code>fm</code> licence agreed once. <code>fm-mcp doctor</code> checks all of it.</p>
+    </div>
+    <div class="sec-body setup">
+      <figure>
+        <div class="term">
+          <div class="term-bar"><span class="dots"><i></i><i></i><i></i></span><span class="t">brew install · fm-mcp install · fm-mcp doctor</span><button class="zoom" type="button" aria-label="Enlarge the recording">Enlarge</button></div>
+          <div class="player" data-gif="setup.gif" data-ms="18800">
+            <img src="setup-poster.png" width="1280" height="680" loading="lazy" alt="A terminal recording: brew install yrangana/tap/fm-mcp, then fm-mcp install updating the Claude Code and Codex config, then fm-mcp doctor with every check passing.">
+            <button class="play" type="button"><span class="tri" aria-hidden="true"></span>Play the recording · 19 s</button>
+          </div>
+        </div>
+        <figcaption>A fresh install, in real time: about 19 seconds.</figcaption>
+      </figure>
+      <div>
+        <p class="label">What doctor checks</p>
+        <ul class="checklist">
+          <li>Apple Silicon and macOS 27</li>
+          <li>The <code>fm</code> tool and its licence</li>
+          <li>The on-device model is available</li>
+          <li>A test call to <code>fm serve</code></li>
+          <li>Claude Code and Codex config, skill and guidance</li>
+          <li>The configured binary is this one</li>
+        </ul>
+        <details class="doctor">
+          <summary>Show the full output on my Mac</summary>
+          <div class="term">
+<pre><span class="ok">✓</span> Apple Silicon: arm64
+<span class="ok">✓</span> macOS 27 or later: 27.0.1
+<span class="ok">✓</span> `fm` tool: /usr/bin/fm
+<span class="ok">✓</span> `fm` licence: Agreed to license FM1 version 1.0
+<span class="ok">✓</span> On-device model: System model available
+<span class="ok">✓</span> Socket path: 70 bytes, under the 104-byte limit
+<span class="ok">✓</span> Model test: `fm serve` started and answered in 2.0 s
+<span class="ok">✓</span> Claude Code config: runs /opt/homebrew/bin/fm-mcp
+<span class="ok">✓</span> Codex config: runs /opt/homebrew/bin/fm-mcp
+<span class="ok">✓</span> Claude Code skill: ~/.claude/skills/fm-delegate/SKILL.md
+<span class="ok">✓</span> Codex guidance: in ~/.codex/AGENTS.md
+<span class="ok">✓</span> Configured binary: matches /opt/homebrew/bin/fm-mcp
+
+All checks passed.</pre>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="compare">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="sec-no">06</span>
+      <h2>Other servers for the same model</h2>
+      <p>From each project's README on 12 October 2026. Where a README doesn't say, the cell says so.</p>
+    </div>
+    <div class="sec-body">
+      <p class="scroll-hint">Scroll the table sideways →</p>
+      <div class="table-wrap">
+        <table class="compare">
+          <thead><tr>
+            <th></th>
+            <th>fm-mcp</th>
+            <th><a href="https://github.com/yihan2099/apple-fm-mcp">yihan2099/apple-fm-mcp</a></th>
+            <th><a href="https://github.com/sophiacave/apple-fm-mcp">sophiacave/apple-fm-mcp</a></th>
+            <th><a href="https://github.com/phimage/mcp-foundation-models">phimage/mcp-foundation-models</a></th>
+          </tr></thead>
+          <tbody>
+            <tr><td>Written in</td><td>Rust</td><td>Python</td><td>Python</td><td>Swift</td></tr>
+            <tr><td>Install</td><td><code>brew install</code>, a shell installer, or <code>cargo install</code></td><td><code>git clone</code>, <code>uv sync</code>, then Apple's SDK from git</td><td><code>pip install</code></td><td><code>git clone</code>, then <code>swift build</code></td></tr>
+            <tr><td>Needs on your Mac</td><td>Nothing else</td><td>Python 3.10+</td><td>Python 3.10+</td><td>Xcode 26 and Swift 6.2 to build</td></tr>
+            <tr><td>macOS</td><td>27 (uses the <code>fm</code> tool)</td><td>26 or later</td><td>26 or later</td><td>26 or later</td></tr>
+            <tr><td>Agent setup</td><td><code>fm-mcp install</code> writes Claude Code and Codex config</td><td>By hand (<code>claude mcp add</code>, or JSON)</td><td>By hand (JSON)</td><td>By hand (JSON)</td></tr>
+            <tr><td>Tells the agent when to delegate</td><td>A Claude Code skill and an <code>AGENTS.md</code> section, installed for you</td><td>Not in the README</td><td>A "when to use" table in the README</td><td>Not in the README</td></tr>
+            <tr><td>Setup check</td><td><code>fm-mcp doctor</code></td><td>A model-availability tool</td><td>A status tool</td><td>Not in the README</td></tr>
+            <tr><td>Input longer than the context</td><td>Split and combined (<code>summarise</code>)</td><td>Not in the README</td><td>Not in the README</td><td>Not in the README</td></tr>
+            <tr><td>Images (OCR)</td><td>Yes</td><td>No (text only)</td><td>Not in the README</td><td>Not in the README</td></tr>
+            <tr><td>Open-ended text generation</td><td>No, on purpose</td><td>Yes, plus multi-turn chat</td><td>Yes</td><td>Yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note">If something here is out of date, <a href="https://github.com/yrangana/fm-mcp/issues">open an issue</a> and I'll fix it.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="privacy">
+  <div class="wrap closing">
+    <div>
+      <p class="label"><b>07</b> · Privacy</p>
+      <h2>Nothing leaves the Mac</h2>
+      <p>fm-mcp talks to <code>fm serve</code> over a local socket and sends nothing over the network. It reads a file only when the agent passes its path, and writes none. Details in <a href="https://github.com/yrangana/fm-mcp/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+    </div>
+    <div>
+      <p class="label"><b>08</b> · Try it</p>
+      <h2>On your Mac</h2>
+      <div class="term" aria-label="Install commands">
+        <div class="term-bar"><span class="dots"><i></i><i></i><i></i></span><span class="t">Terminal</span><button class="copy" data-copy="brew install yrangana/tap/fm-mcp&#10;fm-mcp install">Copy</button></div>
+<pre><span class="p">$ </span>brew install yrangana/tap/fm-mcp
+<span class="p">$ </span>fm-mcp install</pre>
+      </div>
+      <div class="actions">
+        <a class="btn btn-primary" href="https://github.com/yrangana/fm-mcp">View on GitHub</a>
+        <a href="https://github.com/yrangana/fm-mcp#or-the-claude-code-plugin">Or the Claude Code plugin →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Made by <a href="https://yasirurangana.com">Yasiru Rangana</a>. MIT licence. <a href="./">Home</a> · <a href="what-we-learned.html">Notes</a> · <a href="https://github.com/yrangana/fm-mcp">GitHub</a> · <a href="https://github.com/yrangana/fm-mcp/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://github.com/yrangana/fm-mcp/blob/main/docs/TOOLS.md">Tools</a> · <a href="https://github.com/yrangana/fm-mcp/blob/main/SECURITY.md">Security</a></p>
+    <p>fm-mcp is not affiliated with or endorsed by Apple. It calls the <code>fm</code> tool installed on your Mac and includes nothing from Apple.</p>
+  </div>
+</footer>
+
+<dialog class="zoomed" aria-label="Recording, enlarged">
+  <img alt="">
+  <form method="dialog"><button class="close">Close</button></form>
+</dialog>
+
+<script>
+// Recordings show their last frame until the viewer presses play; the GIF then
+// plays once from the start and the still comes back with a replay button.
+document.querySelectorAll('.player').forEach(function (p) {
+  var img = p.querySelector('img'), btn = p.querySelector('.play'), poster = img.getAttribute('src'), timer;
+  btn.addEventListener('click', function () {
+    clearTimeout(timer);
+    p.classList.add('playing');
+    img.src = p.dataset.gif + '?t=' + Date.now();
+    timer = setTimeout(function () {
+      img.src = poster;
+      p.classList.remove('playing');
+      btn.lastChild.textContent = 'Replay';
+    }, Number(p.dataset.ms) + 1500);
+  });
+});
+var dlg = document.querySelector('dialog.zoomed');
+document.querySelectorAll('.zoom').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var src = b.closest('.term').querySelector('.player img');
+    dlg.querySelector('img').src = src.src;
+    dlg.querySelector('img').alt = src.alt;
+    dlg.showModal();
+  });
+});
+dlg.addEventListener('click', function (e) { if (e.target === dlg) dlg.close(); });
+
+document.querySelectorAll('.copy').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var text = b.getAttribute('data-copy');
+    var done = function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); };
+    try {
+      navigator.clipboard.writeText(text).then(done, function () { b.textContent = 'Select and copy'; });
+    } catch (e) { b.textContent = 'Select and copy'; }
+  });
+});
+</script>
+</body>
+</html>

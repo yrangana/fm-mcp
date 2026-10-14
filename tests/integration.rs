@@ -119,6 +119,16 @@ fn guardrail_should_become_a_tool_error() {
 }
 
 #[test]
+fn refusal_should_become_a_tool_error() {
+    let mut server = Server::start(&[]);
+    assert_tool_error(
+        &server.summarise("FAKE_REFUSE"),
+        "The on-device model refused to answer. This often happens with harmless text. \
+         Do this task yourself instead of retrying.",
+    );
+}
+
+#[test]
 fn bad_request_should_become_a_tool_error_with_the_server_message() {
     let mut server = Server::start(&[]);
     assert_tool_error(
@@ -661,6 +671,28 @@ fn classify_should_return_one_of_the_labels() {
         json!({"text": "The app crashes on launch", "labels": ["bug", "feature", "question"]}),
     );
     assert_eq!(result.structured, Some(json!({"label": "bug"})));
+}
+
+#[test]
+fn classify_should_name_the_labels_in_the_prompt() {
+    let mut server = Server::start(&[]);
+    server.call_tool(
+        "classify",
+        json!({"text": "Crash", "labels": ["bug", "feature request"]}),
+    );
+    let request: Value = server
+        .fake_log()
+        .iter()
+        .find_map(|l| l.strip_prefix("request "))
+        .map(|json| serde_json::from_str(json).unwrap())
+        .unwrap();
+    let system = request["messages"][0]["content"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        system.contains("The labels are: bug, feature request."),
+        "{system}"
+    );
 }
 
 #[test]

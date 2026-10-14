@@ -264,7 +264,23 @@ impl FmMcp {
         if let Err(problem) = check_labels(&params.labels) {
             return Ok(tool_error(&problem));
         }
-        if let Err(message) = self.check_fits(&text, CLASSIFY_OUTPUT_TOKENS).await {
+        let mut system = if params.multi {
+            String::from("Choose every label that applies to the text. Use only the given labels.")
+        } else {
+            String::from(
+                "Choose the single label that best fits the text. Use only the given labels.",
+            )
+        };
+        // The `enum` alone doesn't show the model its choices: without the labels in
+        // the prompt it got 17 of 40 news topics and 15 of 40 emotions right, with
+        // them 29 and 27 (2026-10-12).
+        system.push_str(&format!(" The labels are: {}.", params.labels.join(", ")));
+        push_guidance(&mut system, &params.instructions);
+        // The labels can be long, so the fit check counts the prompt with the text.
+        if let Err(message) = self
+            .check_fits(&format!("{system}\n{text}"), CLASSIFY_OUTPUT_TOKENS)
+            .await
+        {
             return Ok(tool_error(&message));
         }
         let labels = json!(params.labels);
@@ -276,14 +292,6 @@ impl FmMcp {
             json!({"type": "object", "properties": {"label": {"type": "string", "enum": labels}},
                    "required": ["label"]})
         };
-        let mut system = if params.multi {
-            String::from("Choose every label that applies to the text. Use only the given labels.")
-        } else {
-            String::from(
-                "Choose the single label that best fits the text. Use only the given labels.",
-            )
-        };
-        push_guidance(&mut system, &params.instructions);
         let request = ChatRequest::new(vec![ChatMessage::system(system), ChatMessage::user(text)])
             .with_json_schema("Classification", schema.clone())
             .with_max_tokens(CLASSIFY_OUTPUT_TOKENS)
@@ -660,6 +668,9 @@ fn backend_error_text(error: &BackendError) -> String {
              harmless text. Do this task yourself instead of retrying."
                 .into()
         }
+        BackendError::Refused => "The on-device model refused to answer. This often happens \
+             with harmless text. Do this task yourself instead of retrying."
+            .into(),
         BackendError::Http { status, message } => format!(
             "fm-mcp sent a request the model server rejected (HTTP {status}: {message}). \
              This is a bug in fm-mcp; please report it."
