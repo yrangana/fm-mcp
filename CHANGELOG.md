@@ -2,6 +2,12 @@
 
 One entry per release. The release workflow uses the entry as the GitHub release notes.
 
+## 0.1.2 - 2026-10-12
+
+- `classify` now names the labels in the prompt. Before, the model saw them only in the answer's schema and often didn't know its choices: on 200 news articles (AG News, 4 topics) it got 49% right, now 64%; on 204 sentences labelled with 6 emotions, 29% then, 58% now.
+- When the model answers "The model refused to answer.", fm-mcp now says so and tells the agent to do the task itself, instead of calling it a bug in fm-mcp.
+- New project site at https://yrangana.github.io/fm-mcp/, with notes on what was learned building fm-mcp.
+
 ## 0.1.1 - 2026-10-11
 
 - `extract` reads amounts in `number` and `integer` fields itself: the model copies `$1,280.00` or `AUD 12,450.50` as text and fm-mcp turns it into a number, or `null` if it isn't plainly one number. Before, such amounts often came back `null`. Over 5 invoices, `total` was right in every answer the model finished; 0.1.0 got 40 of 50 right.

@@ -5,9 +5,13 @@ An MCP server that lets coding agents such as Claude Code and Codex hand simple 
 <!-- Registry verification for the MCP Registry: keep this line. -->
 mcp-name: io.github.yrangana/fm-mcp
 
+**Site:** [yrangana.github.io/fm-mcp](https://yrangana.github.io/fm-mcp/), with [what we learned building it](https://yrangana.github.io/fm-mcp/what-we-learned.html): the measured limits of the on-device model.
+
 ## Why
 
 Coding agents spend paid, remote tokens on simple jobs, like summarising a log or pulling fields out of a document. A small model already on your Mac can do much of that for nothing, and your text never leaves the machine. fm-mcp lets the agent hand off that work, and tells it plainly what the small model can't do.
+
+![Claude Code asked what went wrong in a log: it calls fm-mcp's summarise, checks the summary against the log, and answers.](docs/demo/delegate.gif)
 
 ## Install
 
@@ -22,6 +26,8 @@ brew install yrangana/tap/fm-mcp
 fm-mcp install    # sets up Claude Code and Codex
 fm-mcp doctor     # checks everything fm-mcp needs
 ```
+
+![brew install, fm-mcp install and fm-mcp doctor, recorded in a terminal](docs/demo/setup.gif)
 
 Then start a new Claude Code or Codex session. fm-mcp starts the model server (`fm serve`) itself the first time a tool is called, and stops it when the session ends.
 
