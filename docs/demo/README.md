@@ -7,7 +7,7 @@ Two short GIFs for the README and the site, recorded with [vhs](https://github.c
 
 Two clips instead of one: together they run past the 30 s the launch plan asks for, and each one is useful on its own (setup in the Install section, delegation at the top).
 
-`checkout.log` is a made-up checkout-service log with three problems in it: payment timeouts for six orders, an exhausted database connection pool, and a SKU whose stock went negative. Through fm-mcp 0.1.1, `summarise` with the focus "what went wrong" as one paragraph found all three in 3 runs of 3, in about 5.5 s (2026-10-12). As bullets it did worse: in 2 runs of 3 it spent all 7 bullets on near-identical timeout lines. That's why the prompt asks for a short paragraph.
+`checkout.log` is a made-up checkout-service log with three problems in it: payment timeouts for six orders, an exhausted database connection pool, and a SKU whose stock went negative. Through fm-mcp 0.1.1, `summarise` with the focus "what went wrong" as one paragraph found all three in 3 runs of 3, in about 5.5 s (2026-10-12). As bullets it did worse: in 2 runs of 3 it spent all 7 bullets on near-identical timeout lines. That's why the prompt asks for a short paragraph. fm-mcp 0.1.3 fixes the bullets: each kind of event gets one bullet, and errors come first (all three problems in 20 of 20 runs on this log without a focus, 19 of 20 with it).
 
 ## Once
 

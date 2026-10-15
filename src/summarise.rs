@@ -39,7 +39,10 @@ impl SummaryLength {
             Self::Short => "Write one or two sentences.",
             Self::Medium => "Write one paragraph of three to five sentences.",
             Self::Bullets => {
-                "Write three to seven short bullet points, one per line, each starting with \"- \"."
+                "Write three to seven short bullet points, one per line, each starting with \"- \". \
+                 Each bullet covers a different point: when many lines report the same kind of \
+                 event, give it one bullet, not one per line. Put the most important points \
+                 first; in a log, errors and warnings matter more than routine messages."
             }
         }
     }
@@ -453,5 +456,29 @@ mod tests {
     #[test]
     fn drop_unfinished_end_should_keep_text_with_no_whole_sentence() {
         assert_eq!(drop_unfinished_end("Adds OAuth and"), "Adds OAuth and");
+    }
+
+    fn bullets_system_prompt() -> String {
+        final_request("log", "", SummaryLength::Bullets, false).messages[0]
+            .content
+            .text()
+            .to_owned()
+    }
+
+    #[test]
+    fn bullets_should_ask_for_one_bullet_per_kind_of_event() {
+        assert!(bullets_system_prompt().contains("give it one bullet, not one per line"));
+    }
+
+    #[test]
+    fn bullets_should_rank_errors_above_routine_messages() {
+        assert!(bullets_system_prompt().contains("in a log, errors and warnings matter more"));
+    }
+
+    #[test]
+    fn bullets_should_not_ask_the_model_to_count() {
+        // Asked to say how many times an event happened, it said 6 for 9 failed
+        // logins and 3 for 4 pool errors (2026-10-14).
+        assert!(!bullets_system_prompt().contains("how many"));
     }
 }

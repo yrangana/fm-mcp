@@ -1,6 +1,6 @@
 {
   "name": "fm-mcp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "For Claude Code on Apple Silicon Macs with macOS 27: delegate summarising, extraction, classification and OCR to the free, private on-device model for Apple Foundation Models. Install the fm-mcp binary first: brew install yrangana/tap/fm-mcp.",
   "author": {
     "name": "Yasiru Rangana",

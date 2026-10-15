@@ -2,7 +2,11 @@
 
 One entry per release. The release workflow uses the entry as the GitHub release notes.
 
-## 0.1.2 - 2026-10-12
+## 0.1.3 - 2026-10-15
+
+- `summarise` with `length: "bullets"` gives each kind of event one bullet and puts errors and warnings first. Before, a log with repeated lines could spend every bullet on the repeats, and without a `focus` the bullets often went to routine messages. On two test logs with three problems each, 20 runs per case: all three found in 79 of 80 answers, up from 48 of 80. Bullets no longer state how often something happened, a number the model usually got wrong.
+
+## 0.1.2 - 2026-10-14
 
 - `classify` now names the labels in the prompt. Before, the model saw them only in the answer's schema and often didn't know its choices: on 200 news articles (AG News, 4 topics) it got 49% right, now 64%; on 204 sentences labelled with 6 emotions, 29% then, 58% now.
 - When the model answers "The model refused to answer.", fm-mcp now says so and tells the agent to do the task itself, instead of calling it a bug in fm-mcp.
