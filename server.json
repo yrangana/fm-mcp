@@ -7,12 +7,12 @@
     "url": "https://github.com/yrangana/fm-mcp",
     "source": "github"
   },
-  "version": "0.1.2",
+  "version": "0.1.3",
   "packages": [
     {
       "registryType": "cargo",
       "identifier": "fm-mcp",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "transport": {
         "type": "stdio"
       }
