@@ -10,6 +10,8 @@ mcp-name: io.github.yrangana/fm-mcp
 
 **Site:** [yrangana.github.io/fm-mcp](https://yrangana.github.io/fm-mcp/), with [what we learned building it](https://yrangana.github.io/fm-mcp/what-we-learned.html): the measured limits of the on-device model.
 
+Created by [Yasiru Rangana](https://yasirurangana.com), AI Architect and AI Engineer, Sydney.
+
 ## Why
 
 Coding agents spend paid, remote tokens on simple jobs, like summarising a log or pulling fields out of a document. A small model already on your Mac can do much of that for nothing, and your text never leaves the machine. fm-mcp lets the agent hand off that work, and tells it plainly what the small model can't do.
@@ -147,3 +149,5 @@ scripts/real_fm_smoke.sh           # checks against the real fm on this Mac
 ## Licence
 
 [MIT](LICENSE). fm-mcp is not affiliated with or endorsed by Apple. It calls the `fm` tool installed on your Mac and includes nothing from Apple.
+
+Created by [Yasiru Rangana](https://yasirurangana.com).
