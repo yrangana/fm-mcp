@@ -1,6 +1,7 @@
 # fm-mcp
 
 [![Listed on ClaudePluginHub](https://www.claudepluginhub.com/badge/yrangana-fm-mcp-plugin)](https://www.claudepluginhub.com/plugins/yrangana-fm-mcp-plugin?ref=badge)
+[![Listed on mcpservers.org](https://mcpservers.org/badge.svg)](https://mcpservers.org/servers/yrangana/fm-mcp)
 
 An MCP server that lets coding agents such as Claude Code and Codex hand simple text work to the on-device model for Apple Foundation Models, the `fm` that ships with macOS 27. It's free, private, and runs offline.
 
